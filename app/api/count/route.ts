@@ -81,28 +81,32 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "No role brief in the request." }, { status: 400 });
   }
 
-  const gates = gatingCriteria(brief);
+  const base = brief;
+  const gates = gatingCriteria(base);
 
   try {
     /**
-     * The whole query, plus each gating must-have measured on its own
-     * against the same title, location and experience filters.
+     * Two numbers per criterion, because they answer different questions
+     * and each has caught a different bug.
      *
-     * This is the only way to see a dud criterion. Inside an `or` a
-     * criterion that reaches nobody is invisible, and `explain` will not
-     * help either: it probes the top-level `and` one condition at a time and
-     * never opens a nested group. So a skill that matches zero people looks
-     * identical to one carrying the search, until it is the last must-have
-     * standing and the whole thing returns nothing.
+     *   reach - the criterion on its own against the title, location and
+     *           experience filters. Catches a criterion that matches nobody
+     *           ("AI/ML systems", 0) or nearly everybody (a background that
+     *           repeats the searched title, 1,567 of 2,030).
+     *
+     *   adds  - how many people it brings that no other must-have already
+     *           covers, measured as the whole query minus the whole query
+     *           without it. Catches a criterion with a healthy reach that
+     *           overlaps another entirely, which is invisible inside an
+     *           `or` and costs a slot in the shortlist for nothing.
+     *
+     * 2N+1 counts at 0.03 each, so four criteria is 0.27 credits.
      */
-    const [whole, ...perGate] = await Promise.all([
-      count(brief, apiKey),
+    const [whole, ...rest] = await Promise.all([
+      count(base, apiKey),
+      ...gates.map((c) => count({ ...base, criteria: [c] }, apiKey)),
       ...gates.map((c) =>
-        count({ ...brief, criteria: [c] }, apiKey).then((r) => ({
-          id: c.id,
-          label: c.label,
-          total: r.total,
-        }))
+        count({ ...base, criteria: gates.filter((g) => g.id !== c.id) }, apiKey)
       ),
     ]);
 
@@ -113,13 +117,27 @@ export async function POST(req: Request) {
       );
     }
 
-    const creditsUsed = whole.credits + gates.length * 0.03;
+    const alone = rest.slice(0, gates.length);
+    const without = rest.slice(gates.length);
+
+    const breakdown = gates.map((c, i) => ({
+      id: c.id,
+      label: c.label,
+      reach: alone[i]?.total ?? null,
+      // The pool with this criterion removed. Under `any` the difference is
+      // what the criterion adds; under `all` it is what the criterion
+      // costs. The sign flips with the mode, so the raw number travels and
+      // the UI does the labelling.
+      withoutTotal: without[i]?.total ?? null,
+    }));
+
+    const creditsUsed = [whole, ...rest].reduce((sum, r) => sum + r.credits, 0);
 
     return NextResponse.json({
       total: whole.total,
       relation: whole.relation,
       remarks: whole.remarks,
-      breakdown: perGate,
+      breakdown,
       creditsUsed: Number(creditsUsed.toFixed(2)),
     });
   } catch (err) {

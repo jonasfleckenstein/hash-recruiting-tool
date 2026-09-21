@@ -162,6 +162,13 @@ function anyOf(conditions: Condition[]): Condition | null {
   return { op: "or", conditions };
 }
 
+/** One condition, or an `and` group, or nothing. */
+function allOf(conditions: Condition[]): Condition | null {
+  if (conditions.length === 0) return null;
+  if (conditions.length === 1) return conditions[0];
+  return { op: "and", conditions };
+}
+
 /** Words the index would see, lower-cased. Punctuation and hyphens split. */
 function tokenSet(value: string): Set<string> {
   return new Set(
@@ -393,11 +400,13 @@ function criterionCondition(criterion: Criterion, brief: RoleBrief): Condition |
 /**
  * Build the Crustdata request from a brief.
  *
- *   AND [ or(titles), location, experience range, or(filterable must-haves) ]
+ *   AND [ or(titles), location, experience range, gate(must-haves) ]
  *
- * The must-haves sit in an `or` group on purpose. One hit is enough to surface
- * someone; which of the others they missed is counted at scoring time rather
- * than silently removing them from the pool.
+ * The gate combines the filterable must-haves with either `or` or `and`,
+ * depending on the brief. `or` is the default: one hit is enough to surface
+ * someone, and which of the others they missed is counted at scoring time
+ * rather than silently removing them. `and` gives a much smaller, exact
+ * pool and drops anyone who simply never listed one of the requirements.
  */
 export function buildCrustdataQuery(brief: RoleBrief, limit = 25): CrustdataQuery {
   const and: Condition[] = [];
@@ -447,7 +456,7 @@ export function buildCrustdataQuery(brief: RoleBrief, limit = 25): CrustdataQuer
     .map((c) => criterionCondition(c, brief))
     .filter((c): c is Condition => c !== null);
 
-  const gate = anyOf(gates);
+  const gate = brief.gateMode === "all" ? allOf(gates) : anyOf(gates);
   if (gate) and.push(gate);
 
   return {

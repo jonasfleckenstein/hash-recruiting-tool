@@ -17,6 +17,7 @@ import type {
   Criterion,
   CriterionKind,
   EmploymentType,
+  GateMode,
   LocationMode,
   RoleBrief,
   SkillMatch,
@@ -74,6 +75,7 @@ export default function RoleIntakeForm() {
   const [minYears, setMinYears] = useState("");
   const [maxYears, setMaxYears] = useState("");
   const [yearsTouched, setYearsTouched] = useState(false);
+  const [gateMode, setGateMode] = useState<GateMode>("any");
   /** Which fields the job ad filled in, so nothing changes silently. */
   const [adFilled, setAdFilled] = useState<string[]>([]);
 
@@ -84,13 +86,25 @@ export default function RoleIntakeForm() {
     total: number | null;
     relation: string | null;
     remarks: { message?: string; hint?: string }[];
-    breakdown: { id: string; label: string; total: number | null }[];
+    breakdown: {
+      id: string;
+      label: string;
+      reach: number | null;
+      withoutTotal: number | null;
+    }[];
     creditsUsed: number | null;
+    /** The query these numbers were measured against. */
+    signature: string;
   } | null>(null);
   const [countError, setCountError] = useState("");
   const [counting, setCounting] = useState(false);
 
   const [fetchLimit, setFetchLimit] = useState(String(DEFAULT_FETCH_LIMIT));
+  /** Clamped to Crustdata's per-page maximum, so the projected cost is real. */
+  const plannedFetch = Math.min(
+    1000,
+    Math.max(0, Math.round(Number(fetchLimit) || 0))
+  );
   const [searchResult, setSearchResult] = useState<SearchOutcome | null>(null);
   const [searchError, setSearchError] = useState("");
   const [searching, setSearching] = useState(false);
@@ -219,27 +233,41 @@ export default function RoleIntakeForm() {
       employmentType,
       minYears: minYears.trim() === "" ? null : Number(minYears),
       maxYears: maxYears.trim() === "" ? null : Number(maxYears),
+      gateMode,
       criteria,
     }),
     [
       title, variants, locationMode, city, radius, radiusUnit,
-      tzMin, tzMax, regions, employmentType, minYears, maxYears, criteria,
+      tzMin, tzMax, regions, employmentType, minYears, maxYears, gateMode,
+      criteria,
     ]
   );
 
   const query = useMemo(() => buildCrustdataQuery(brief), [brief]);
+  const querySignature = useMemo(() => JSON.stringify(query), [query]);
 
-  // A count belongs to the query that produced it, so editing anything
-  // clears it rather than leaving a stale number on screen.
-  useEffect(() => {
-    setCount(null);
-    setCountError("");
-  }, [query]);
+  /**
+   * Counts are kept when the query changes, and marked stale instead.
+   * Clearing them would throw away the only numbers on screen the moment
+   * you act on them, which is exactly when they are most useful as a
+   * before-and-after.
+   */
+  const countStale = count !== null && count.signature !== querySignature;
+
+  const countsById = useMemo(() => {
+    const map = new Map<
+      string,
+      { reach: number | null; withoutTotal: number | null }
+    >();
+    for (const row of count?.breakdown ?? []) {
+      map.set(row.id, { reach: row.reach, withoutTotal: row.withoutTotal });
+    }
+    return map;
+  }, [count]);
 
   const checkCount = async () => {
     setCounting(true);
     setCountError("");
-    setCount(null);
     try {
       const res = await fetch("/api/count", {
         method: "POST",
@@ -248,7 +276,7 @@ export default function RoleIntakeForm() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "The count request failed.");
-      setCount(data);
+      setCount({ ...data, signature: querySignature });
     } catch (err) {
       setCountError(err instanceof Error ? err.message : "The count request failed.");
     }
@@ -749,13 +777,35 @@ export default function RoleIntakeForm() {
             </div>
           </div>
 
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <span className="text-xs text-neutral-500">A candidate needs</span>
+            <button
+              type="button"
+              onClick={() => setGateMode("any")}
+              className={chipClass(gateMode === "any")}
+            >
+              any one of these
+            </button>
+            <button
+              type="button"
+              onClick={() => setGateMode("all")}
+              className={chipClass(gateMode === "all")}
+            >
+              all of these
+            </button>
+          </div>
+
           <p className="mb-3 text-xs text-neutral-500">
-            These narrow the search. A candidate needs at least one of them to
-            appear at all, and every one they miss is reported on their card
-            rather than removing them silently.
+            {gateMode === "any"
+              ? "These narrow the search, but nobody is dropped for missing one. Every miss is reported on their card instead."
+              : "Every one of these is required. A much smaller and more exact pool, at the cost of losing people who simply never listed one of them, with no card and no chance to judge."}
           </p>
           <CriterionList
             items={mustFilters}
+            counts={countsById}
+            countsStale={countStale}
+            gateMode={gateMode}
+            total={count?.total ?? null}
             emptyLabel="Nothing here yet. Without one of these the search is scoped only by title, location and experience."
             onUpdate={updateCriterion}
             onRemove={removeCriterion}
@@ -844,7 +894,11 @@ export default function RoleIntakeForm() {
             {counting ? "Counting" : "How many people match?"}
           </button>
           {count && (
-            <div className="mt-2 rounded-lg bg-neutral-100 px-3 py-2">
+            <div
+              className={`mt-2 rounded-lg px-3 py-2 ${
+                countStale ? "bg-neutral-50 text-neutral-400" : "bg-neutral-100"
+              }`}
+            >
               {count.total === null ? (
                 <p className="text-xs text-neutral-600">
                   Crustdata did not return a total for this query, which it
@@ -864,7 +918,7 @@ export default function RoleIntakeForm() {
                   ))}
                 </>
               ) : (
-                <p className="text-sm text-neutral-900">
+                <p className="text-sm">
                   <span className="font-semibold">
                     {count.relation === "gte" ? "at least " : ""}
                     {count.total.toLocaleString()}
@@ -872,26 +926,10 @@ export default function RoleIntakeForm() {
                   people match
                 </p>
               )}
-              {count.breakdown && count.breakdown.length > 0 && (
-                <ul className="mt-2 space-y-0.5 border-t border-neutral-200 pt-2">
-                  {count.breakdown.map((b) => (
-                    <li
-                      key={b.id}
-                      className="flex items-baseline justify-between gap-2 text-[11px]"
-                    >
-                      <span className="truncate text-neutral-600">{b.label}</span>
-                      <span
-                        className={
-                          b.total === 0
-                            ? "shrink-0 font-semibold text-amber-700"
-                            : "shrink-0 text-neutral-700"
-                        }
-                      >
-                        {b.total === null ? "?" : b.total.toLocaleString()}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
+              {countStale && (
+                <p className="mt-1 text-[11px]">
+                  Measured before your last edit. Count again to refresh.
+                </p>
               )}
               {count.creditsUsed !== null && (
                 <p className="mt-1 text-[10px] text-neutral-500">
@@ -914,10 +952,10 @@ export default function RoleIntakeForm() {
                 <input
                   type="number"
                   min={1}
-                  max={100}
+                  max={1000}
                   value={fetchLimit}
                   onChange={(e) => setFetchLimit(e.target.value)}
-                  className="mt-1 block w-16 rounded-lg border border-neutral-300 bg-white px-2 py-1.5 text-sm outline-none focus:border-neutral-900"
+                  className="mt-1 block w-20 rounded-lg border border-neutral-300 bg-white px-2 py-1.5 text-sm outline-none focus:border-neutral-900"
                 />
               </label>
               <button
@@ -930,8 +968,23 @@ export default function RoleIntakeForm() {
               </button>
             </div>
             <p className="mt-1 text-[10px] text-neutral-500">
-              0.03 credits each. Saved to disk so scoring can be rerun without
-              paying again.
+              {plannedFetch > 0 ? (
+                <>
+                  {plannedFetch.toLocaleString()} profiles at 0.03 credits ={" "}
+                  <span className={plannedFetch > 200 ? "font-semibold" : ""}>
+                    {(plannedFetch * 0.03).toFixed(2)} credits
+                  </span>
+                  {count?.total !== null &&
+                    count?.total !== undefined &&
+                    !countStale &&
+                    plannedFetch > count.total && (
+                      <> · only {count.total.toLocaleString()} match, so you pay for those</>
+                    )}
+                  . Saved to disk so scoring can be rerun without paying again.
+                </>
+              ) : (
+                <>Enter how many profiles to buy. Maximum 1000 per fetch.</>
+              )}
             </p>
           </div>
 
@@ -1025,11 +1078,19 @@ function CriterionList({
   emptyLabel,
   onUpdate,
   onRemove,
+  counts,
+  countsStale = false,
+  gateMode = "any",
+  total,
 }: {
   items: Criterion[];
   emptyLabel: string;
   onUpdate: (id: string, patch: Partial<Criterion>) => void;
   onRemove: (id: string) => void;
+  counts?: Map<string, { reach: number | null; withoutTotal: number | null }>;
+  countsStale?: boolean;
+  gateMode?: GateMode;
+  total?: number | null;
 }) {
   if (items.length === 0) {
     return <p className="text-xs text-neutral-400">{emptyLabel}</p>;
@@ -1093,6 +1154,13 @@ function CriterionList({
                 )}
               </div>
               {c.why && <p className="mt-1 text-[11px] text-neutral-500">{c.why}</p>}
+              {counts?.has(c.id) && <CriterionCount
+                reach={counts.get(c.id)?.reach ?? null}
+                withoutTotal={counts.get(c.id)?.withoutTotal ?? null}
+                total={total ?? null}
+                gateMode={gateMode}
+                stale={countsStale}
+              />}
             </div>
             <div className="flex shrink-0 items-center gap-1">
               <button
@@ -1124,6 +1192,59 @@ function CriterionList({
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * The two numbers that decide whether a criterion earns its place.
+ *
+ * "reaches" is the criterion alone, which exposes one that matches nobody
+ * or nearly everybody.
+ *
+ * The second number depends on the gate. Under `any` it is what the
+ * criterion adds beyond the others, which exposes one that overlaps
+ * another entirely and takes up a slot for free. Under `all` it is what
+ * the criterion costs, since every requirement only ever removes people,
+ * and that is the number worth seeing before deciding it is truly
+ * mandatory.
+ */
+function CriterionCount({
+  reach,
+  withoutTotal,
+  total,
+  gateMode,
+  stale,
+}: {
+  reach: number | null;
+  withoutTotal: number | null;
+  total: number | null;
+  gateMode: GateMode;
+  stale: boolean;
+}) {
+  const delta =
+    total !== null && withoutTotal !== null ? total - withoutTotal : null;
+
+  const adds = gateMode === "any" && delta !== null ? Math.max(0, delta) : null;
+  const costs = gateMode === "all" && delta !== null ? Math.max(0, -delta) : null;
+
+  const dead = reach === 0 || (gateMode === "any" && adds === 0);
+  const tone = stale
+    ? "text-neutral-400"
+    : dead
+      ? "text-amber-700"
+      : "text-neutral-600";
+
+  return (
+    <p className={`mt-1 text-[11px] ${tone}`}>
+      reaches {reach === null ? "?" : reach.toLocaleString()}
+      {gateMode === "any"
+        ? `, adds ${adds === null ? "?" : adds.toLocaleString()}`
+        : `, costs ${costs === null ? "?" : costs.toLocaleString()}`}
+      {stale && " (before your last edit)"}
+      {!stale && reach === 0 && " \u2014 matches nobody"}
+      {!stale && reach !== 0 && gateMode === "any" && adds === 0 &&
+        " \u2014 every one of these is already covered"}
+    </p>
   );
 }
 

@@ -14,7 +14,11 @@ export async function POST(req: Request) {
     const body = (await req.json()) as { brief?: RoleBrief; limit?: unknown };
     brief = body.brief;
     const asked = Number(body.limit);
-    if (Number.isFinite(asked) && asked >= 1 && asked <= 100) limit = Math.round(asked);
+    // 1000 is Crustdata's own per-page maximum. Anything larger needs
+    // cursor pagination, which this does not do yet.
+    if (Number.isFinite(asked) && asked >= 1 && asked <= 1000) {
+      limit = Math.round(asked);
+    }
   } catch {
     brief = undefined;
   }

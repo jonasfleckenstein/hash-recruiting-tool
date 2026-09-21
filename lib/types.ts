@@ -109,6 +109,16 @@ export interface TitleVariant {
 export type LocationMode = "onsite" | "remote";
 export type EmploymentType = "full_time" | "part_time" | "contract" | "internship";
 
+/**
+ * How the filterable must-haves combine in the query.
+ *
+ *  any - at least one of them. Nobody strong is lost for missing a single
+ *        requirement, and every miss is reported on their card instead.
+ *  all - every one of them. A far smaller and more exact pool, at the cost
+ *        of silently dropping people who simply never listed something.
+ */
+export type GateMode = "any" | "all";
+
 export interface RoleBrief {
   title: string;
   titleVariants: TitleVariant[];
@@ -126,6 +136,7 @@ export interface RoleBrief {
   employmentType: EmploymentType;
   minYears: number | null;
   maxYears: number | null;
+  gateMode: GateMode;
   criteria: Criterion[];
 }
 

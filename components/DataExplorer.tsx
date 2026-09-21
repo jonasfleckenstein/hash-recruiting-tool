@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import type { RawProfile } from "@/lib/candidates";
 import type { EnrichedRecord, StoredEnrichment } from "@/lib/enrich";
 
@@ -139,9 +140,17 @@ export default function DataExplorer() {
         {dataset && (
           <>
             <div className="rounded-xl border border-neutral-200 bg-white p-4">
-              <h2 className="text-sm font-semibold text-neutral-900">
-                {dataset.title}
-              </h2>
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h2 className="text-sm font-semibold text-neutral-900">
+                  {dataset.title}
+                </h2>
+                <Link
+                  href={`/shortlist/${dataset.id}`}
+                  className="rounded-lg border border-neutral-300 px-2.5 py-1 text-[11px] hover:bg-neutral-100"
+                >
+                  Rank this pool
+                </Link>
+              </div>
               <p className="mt-1 text-xs text-neutral-500">
                 {dataset.fetched} profiles
                 {dataset.total !== null && ` of ${dataset.total.toLocaleString()} matching`}

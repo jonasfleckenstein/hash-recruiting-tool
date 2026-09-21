@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { ReactNode } from "react";
-import CandidateList, { type SearchOutcome } from "@/components/CandidateList";
 import Combobox from "@/components/Combobox";
 import TitleCombobox from "@/components/TitleCombobox";
 import {
@@ -13,6 +13,10 @@ import {
   continentsForWindow,
   effectiveTitles,
 } from "@/lib/crustdata";
+import {
+  DEFAULT_DISCIPLINE_TERMS,
+  DEFAULT_WEIGHTS,
+} from "@/lib/scoring";
 import type {
   Criterion,
   CriterionKind,
@@ -72,9 +76,19 @@ export default function RoleIntakeForm() {
   const [employmentType, setEmploymentType] = useState<EmploymentType>("full_time");
   const [employmentTouched, setEmploymentTouched] = useState(false);
   const [locationTouched, setLocationTouched] = useState(false);
-  const [minYears, setMinYears] = useState("");
-  const [maxYears, setMaxYears] = useState("");
-  const [yearsTouched, setYearsTouched] = useState(false);
+  /**
+   * Seniority the ad asked for, carried but never filtered on.
+   *
+   * It is not a control here: this step decides who the search returns,
+   * and experience is not part of that. The shortlist page reads this as
+   * the starting band and lets it be changed there, where the effect of a
+   * change is visible immediately and costs nothing.
+   */
+  const [adMinYears, setAdMinYears] = useState<number | null>(null);
+  const [adMaxYears, setAdMaxYears] = useState<number | null>(null);
+  const [disciplineTerms, setDisciplineTerms] = useState<string[]>(
+    DEFAULT_DISCIPLINE_TERMS
+  );
   const [gateMode, setGateMode] = useState<GateMode>("any");
   /** Which fields the job ad filled in, so nothing changes silently. */
   const [adFilled, setAdFilled] = useState<string[]>([]);
@@ -105,9 +119,9 @@ export default function RoleIntakeForm() {
     1000,
     Math.max(0, Math.round(Number(fetchLimit) || 0))
   );
-  const [searchResult, setSearchResult] = useState<SearchOutcome | null>(null);
   const [searchError, setSearchError] = useState("");
   const [searching, setSearching] = useState(false);
+  const router = useRouter();
 
   // Regions follow the timezone window until the operator edits them by hand.
   useEffect(() => {
@@ -153,6 +167,13 @@ export default function RoleIntakeForm() {
           ...data.titleVariants,
         ]);
 
+        // Vocabulary for the scorer: which past roles count as this field.
+        // Without it the tool would only ever be able to count engineering
+        // years, and a design pool would score everyone at zero.
+        if (data.disciplineTerms && data.disciplineTerms.length >= 3) {
+          setDisciplineTerms(data.disciplineTerms);
+        }
+
         if (trimmed.length === 0 && data.normalizedTitle) {
           // Pin the signature first so the debounced title watcher does not
           // fire a second call for the title we just learned.
@@ -183,14 +204,13 @@ export default function RoleIntakeForm() {
             setEmploymentType(setup.employmentType);
             filled.push("employment type");
           }
-          if (!yearsTouched) {
-            // Written even when null, so a number from a previous ad does
-            // not survive into a role that never mentions one.
-            setMinYears(setup.minYears === null ? "" : String(setup.minYears));
-            setMaxYears(setup.maxYears === null ? "" : String(setup.maxYears));
-            if (setup.minYears !== null || setup.maxYears !== null) {
-              filled.push("experience range");
-            }
+          // Recorded, not applied. It reaches the shortlist page as the
+          // opening seniority band and never touches the query. No
+          // "touched" guard, because there is no control here to touch.
+          setAdMinYears(setup.minYears);
+          setAdMaxYears(setup.maxYears);
+          if (setup.minYears !== null || setup.maxYears !== null) {
+            filled.push("seniority, used for scoring only");
           }
         }
         setAdFilled(filled);
@@ -208,7 +228,7 @@ export default function RoleIntakeForm() {
         setStatus("error");
       }
     },
-    [title, jd, cityTouched, yearsTouched, locationTouched, employmentTouched]
+    [title, jd, cityTouched, locationTouched, employmentTouched]
   );
 
   useEffect(() => {
@@ -231,15 +251,21 @@ export default function RoleIntakeForm() {
       tzMax,
       regions,
       employmentType,
-      minYears: minYears.trim() === "" ? null : Number(minYears),
-      maxYears: maxYears.trim() === "" ? null : Number(maxYears),
+      minYears: adMinYears,
+      maxYears: adMaxYears,
+      // Both belong to the ranking step and are set on the shortlist page.
+      // They travel with the brief so a saved search records the defaults
+      // it was ranked against.
+      experienceBand: null,
+      disciplineTerms,
+      weights: DEFAULT_WEIGHTS,
       gateMode,
       criteria,
     }),
     [
       title, variants, locationMode, city, radius, radiusUnit,
-      tzMin, tzMax, regions, employmentType, minYears, maxYears, gateMode,
-      criteria,
+      tzMin, tzMax, regions, employmentType, adMinYears, adMaxYears,
+      disciplineTerms, gateMode, criteria,
     ]
   );
 
@@ -294,7 +320,9 @@ export default function RoleIntakeForm() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "The search failed.");
-      setSearchResult(data);
+      // The pool is on disk now. Everything after this point is free to
+      // rerun, so it belongs on its own page rather than under the form.
+      router.push(`/shortlist/${data.id}`);
     } catch (err) {
       setSearchError(err instanceof Error ? err.message : "The search failed.");
     }
@@ -379,9 +407,13 @@ export default function RoleIntakeForm() {
     });
     const data = (await res.json()) as { match?: SkillMatch; message?: string };
 
-    if (!data.match) return data.message ?? "That skill could not be added.";
+    // Bound to a const before the closure: narrowing a property does not
+    // survive into a callback, since TypeScript cannot prove `data` has
+    // not been reassigned by the time the updater runs.
+    const match = data.match;
+    if (!match) return data.message ?? "That skill could not be added.";
 
-    const usable = data.match.status !== "absent";
+    const usable = match.status !== "absent";
     setCriteria((prev) => [
       ...prev,
       {
@@ -389,7 +421,7 @@ export default function RoleIntakeForm() {
         label: label.trim(),
         kind,
         check: usable ? "filter" : "judge",
-        skills: usable ? [data.match] : undefined,
+        skills: usable ? [match] : undefined,
         weight: 2,
         source: "manual",
         selected: true,
@@ -742,40 +774,12 @@ export default function RoleIntakeForm() {
         </Section>
 
         {/* Criteria */}
-        <Section title="Must-haves, filtering and scoring" step={3}>
-          <div className="mb-4 border-b border-neutral-100 pb-4">
-            <p className="text-sm font-medium text-neutral-700">
-              Years of experience
-            </p>
-            <div className="mt-1 flex items-center gap-2">
-              <input
-                type="number"
-                min={0}
-                value={minYears}
-                onChange={(e) => {
-                  setMinYears(e.target.value);
-                  setYearsTouched(true);
-                }}
-                placeholder="min"
-                className="w-20 rounded-lg border border-neutral-300 bg-white px-3 py-2 text-base font-normal outline-none focus:border-neutral-900"
-              />
-              <span className="text-neutral-400">to</span>
-              <input
-                type="number"
-                min={0}
-                value={maxYears}
-                onChange={(e) => {
-                  setMaxYears(e.target.value);
-                  setYearsTouched(true);
-                }}
-                placeholder="max"
-                className="w-20 rounded-lg border border-neutral-300 bg-white px-3 py-2 text-base font-normal outline-none focus:border-neutral-900"
-              />
-              <span className="text-[11px] text-neutral-500">
-                applied to everyone, unlike the criteria below
-              </span>
-            </div>
-          </div>
+        <Section title="Must-haves, filtering the search" step={3}>
+          <p className="mb-3 text-xs text-neutral-500">
+            The only things here that reach Crustdata. Seniority, tenure and
+            everything else about a person is decided after the pool comes
+            back, on the shortlist page, where changing your mind is free.
+          </p>
 
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <span className="text-xs text-neutral-500">A candidate needs</span>
@@ -806,7 +810,7 @@ export default function RoleIntakeForm() {
             countsStale={countStale}
             gateMode={gateMode}
             total={count?.total ?? null}
-            emptyLabel="Nothing here yet. Without one of these the search is scoped only by title, location and experience."
+            emptyLabel="Nothing here yet. Without one of these the search is scoped only by title and location."
             onUpdate={updateCriterion}
             onRemove={removeCriterion}
           />
@@ -997,15 +1001,14 @@ export default function RoleIntakeForm() {
           {gateCount === 0 && criteria.length > 0 && (
             <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
               No must-have can be used as a search filter, so the query is only
-              scoped by title, location and experience. That will return a wide
-              pool and push all of the work onto scoring.
+              scoped by title and location. That will return a wide pool and
+              push all of the work onto scoring.
             </p>
           )}
         </div>
       </aside>
       </div>
 
-      {searchResult && <CandidateList result={searchResult} />}
     </div>
   );
 }

@@ -22,6 +22,16 @@ export interface EmploymentRole {
   company_type?: string | null;
 }
 
+/** Where someone says they are. Every part is nullable, and the whole
+ *  object can be missing, so it is named rather than inlined: a derived
+ *  type would not carry the `undefined` that an optional parent adds. */
+export interface ProfileLocation {
+  city?: string | null;
+  state?: string | null;
+  country?: string | null;
+  raw?: string | null;
+}
+
 /** The shape of a profile as Person Search returns it. Everything is
  *  optional: search returns a lightweight subset and the docs are explicit
  *  that fields go missing. */
@@ -32,12 +42,7 @@ export interface RawProfile {
     headline?: string;
     current_title?: string;
     profile_picture_permalink?: string | null;
-    location?: {
-      city?: string | null;
-      state?: string | null;
-      country?: string | null;
-      raw?: string | null;
-    } | null;
+    location?: ProfileLocation;
     normalized_title?: {
       matched_title?: string | null;
       department?: string | null;
@@ -112,17 +117,9 @@ function allWordsPresent(haystack: string, needle: string): boolean {
   return need.length > 0 && need.every((t) => hay.has(t));
 }
 
-function joinLocation(location: RawProfile["basic_profile"] extends infer T
-  ? T extends { location?: infer L }
-    ? L
-    : never
-  : never): string | undefined {
+function joinLocation(location?: ProfileLocation | null): string | undefined {
   if (!location) return undefined;
-  const { city, country, raw } = location as {
-    city?: string | null;
-    country?: string | null;
-    raw?: string | null;
-  };
+  const { city, country, raw } = location;
   const parts = [city, country].filter(Boolean);
   return parts.length > 0 ? parts.join(", ") : raw ?? undefined;
 }

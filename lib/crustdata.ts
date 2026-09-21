@@ -438,12 +438,21 @@ export function buildCrustdataQuery(brief: RoleBrief, limit = 25): CrustdataQuer
     if (regions) and.push(regions);
   }
 
-  if (brief.minYears !== null) {
-    and.push({ field: "years_of_experience_raw", type: "=>", value: brief.minYears });
-  }
-  if (brief.maxYears !== null) {
-    and.push({ field: "years_of_experience_raw", type: "=<", value: brief.maxYears });
-  }
+  /**
+   * Experience is deliberately NOT filtered.
+   *
+   * `years_of_experience_raw` is undocumented, is never returned by search
+   * so it cannot be audited, and four plausible reconstructions of it each
+   * placed under 62% of a pool inside the window that pool had been
+   * filtered on. A live test was worse than that sounds: a 5-to-10-year
+   * bound cut a pool from 164 to 63 and removed all five of the top-ranked
+   * candidates, including one whose engineering experience sat inside the
+   * band but whose earlier career pushed the vendor's number over it.
+   *
+   * Seniority now travels in `brief.experienceBand` and is scored against
+   * years derived from the returned employment history, where a
+   * miscalculation costs points instead of silently deleting people.
+   */
 
   // Employment type is intentionally not a filter yet. Crustdata does expose
   // experience.employment_details.current.employment_type, but its accepted

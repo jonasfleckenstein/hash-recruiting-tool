@@ -119,6 +119,42 @@ export type EmploymentType = "full_time" | "part_time" | "contract" | "internshi
  */
 export type GateMode = "any" | "all";
 
+/**
+ * How the pre-enrichment ranking is weighted.
+ *
+ * Lives on the brief rather than in the scorer because the right weighting
+ * is a property of the role, not of the tool. Freelance work is a negative
+ * signal for a salaried engineering hire and completely normal in design;
+ * a missing degree means less for a designer with a portfolio. These are
+ * judgement calls the operator makes per role.
+ *
+ * 0 turns a signal off entirely.
+ */
+export interface ScoringWeights {
+  title: number;
+  experience: number;
+  tenureNow: number;
+  tenureHistory: number;
+  education: number;
+  /**
+   * Company stage: a rule about the size of the companies someone has
+   * worked at, and how strictly to apply it.
+   *
+   *  off      - ignored entirely
+   *  penalise - failing the rule costs points but keeps the card
+   *  filter   - failing the rule removes the profile
+   *
+   * Off by default. It is a preference about working environment rather
+   * than a measure of ability, and `filter` deletes people invisibly,
+   * which is the failure mode the years bound already demonstrated.
+   */
+  companyStageRule: string | null;
+  companyStageMode: "off" | "penalise" | "filter";
+  penaliseGap: boolean;
+  penaliseFreelance: boolean;
+  penaliseStale: boolean;
+}
+
 export interface RoleBrief {
   title: string;
   titleVariants: TitleVariant[];
@@ -134,8 +170,31 @@ export interface RoleBrief {
    *  unless the operator overrides them. */
   regions: string[];
   employmentType: EmploymentType;
+  /**
+   * Deprecated as a filter.
+   *
+   * These used to become `years_of_experience_raw` conditions in the query.
+   * They no longer do. That field is undocumented, is never returned by
+   * search, and no reconstruction of it put more than 62% of a pool inside
+   * the window that pool had been filtered on. Worse, a bound on it
+   * silently removed every one of a shortlist's top five, including a
+   * career changer whose engineering experience was well inside the band.
+   *
+   * Experience is now `experienceBand`, scored rather than filtered, so a
+   * mismatch costs points instead of deleting someone invisibly. Kept here
+   * only so saved briefs still parse.
+   */
   minYears: number | null;
   maxYears: number | null;
+  /** Target seniority band, scored not filtered. Null lets the pool set it. */
+  experienceBand: string | null;
+  /**
+   * Words marking a role as belonging to this discipline, used to count
+   * relevant experience and to gate out the wrong field. Written by the
+   * intake model so the tool is not hardcoded to engineering.
+   */
+  disciplineTerms: string[];
+  weights: ScoringWeights;
   gateMode: GateMode;
   criteria: Criterion[];
 }
@@ -158,6 +217,8 @@ export interface SuggestResult {
   titleVariants: TitleVariant[];
   criteria: Criterion[];
   setup: RoleSetupHints;
+  /** Discipline vocabulary for the scorer. See RoleBrief.disciplineTerms. */
+  disciplineTerms: string[];
   /** true when the payload came from the on-disk cache rather than the API. */
   cached: boolean;
 }

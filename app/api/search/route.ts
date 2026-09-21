@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { toCandidate } from "@/lib/candidates";
 import { summariseCoverage } from "@/lib/coverage";
-import { DEFAULT_FETCH_LIMIT, runSearch } from "@/lib/search";
+import { DEFAULT_FETCH_LIMIT } from "@/lib/crustdata";
+import { runSearch } from "@/lib/search";
 import type { RoleBrief } from "@/lib/types";
 
 export const runtime = "nodejs";

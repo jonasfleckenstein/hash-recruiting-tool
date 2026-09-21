@@ -27,7 +27,7 @@ const MAX_ALTERNATIVES = 8;
  * Cached entries written by an older version then simply miss and get
  * regenerated, instead of feeding a stale shape back into the UI.
  */
-const CACHE_VERSION = "v8";
+const CACHE_VERSION = "v9";
 
 function cacheKey(title: string, jd: string): string {
   const normalized = `${CACHE_VERSION}|${title.trim().toLowerCase()}|${jd.trim()}`;
@@ -86,6 +86,13 @@ Titles are matched by their words: every word of a variant must appear in the ca
 Keep the seniority of the input title exactly: a seniority change is not a synonym. At most ${MAX_SYNONYMS}.
 
 "adjacent_titles" overlap the role without being the same job: broader titles that cover this role among others, one-sided specialisms, or the same work at a different seniority or scope. These are shown switched off and only searched if the recruiter turns one on, so include the ones genuinely worth a deliberate decision. Give each a "note" of at most eight words saying how it differs. At most ${MAX_ADJACENT}.
+
+DISCIPLINE TERMS
+Return "discipline_terms": lowercase words that mark a job title as belonging to the same FIELD as this role. They are used to work out how many years someone has spent in the field, and to drop people whose current job is in a different field entirely.
+
+They must be broader than the title variants, because they have to match somebody's FIRST job in the field, which is junior and specific: "Junior Visual Designer", "UI Intern", "Graduate Developer". For a design role: designer, design, ux, ui, user research, researcher, product design, visual, interaction. For an engineering role: engineer, engineering, developer, architect, programmer, frontend, backend, software.
+
+Use single words or short phrases that appear INSIDE a job title. Never the whole title. Never a technology. Between 5 and 12 of them.
 
 ROLE SETUP
 Read these from the ad when it states them. Return null for anything it does not state. Never infer or guess: these fill in form fields, and a wrong guess is worse than an empty box.
@@ -167,6 +174,7 @@ Return only a JSON object, no prose and no code fences:
   "normalized_title": string,
   "synonyms": [string],
   "adjacent_titles": [{"label": string, "note": string}],
+  "discipline_terms": [string],
   "setup": {"city": string|null, "remote": boolean|null, "employment_type": string|null, "min_years": number|null, "max_years": number|null},
   "must": [{"label": string, "type": "skills"|"background"|"field"|"judge", "skills": [{"label": string, "kind": string}], "backgrounds": [string], "field": string, "match": string, "weight": 1|2|3, "why": string, "source": "jd"|"inferred"}],
   "nice": [ same shape ]
@@ -467,11 +475,26 @@ export async function getSuggestions(
     };
   });
 
+  /**
+   * Discipline terms are lower-cased and kept short. A term long enough to
+   * be a whole title would only ever match that one title, which defeats
+   * the point of reaching someone's first junior role in the field.
+   */
+  const disciplineTerms = Array.from(
+    new Set(
+      (Array.isArray(raw.discipline_terms) ? raw.discipline_terms : [])
+        .filter((t): t is string => typeof t === "string")
+        .map((t) => t.trim().toLowerCase())
+        .filter((t) => t.length >= 2 && t.length <= 24)
+    )
+  ).slice(0, 12);
+
   const result: SuggestResult = {
     normalizedTitle,
     titleVariants: normalizeVariants(raw, ownTitles),
     criteria,
     setup: parseSetup(raw.setup),
+    disciplineTerms,
     cached: false,
   };
 

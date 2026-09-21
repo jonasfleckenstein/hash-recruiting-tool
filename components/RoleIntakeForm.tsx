@@ -89,6 +89,9 @@ export default function RoleIntakeForm() {
   const [disciplineTerms, setDisciplineTerms] = useState<string[]>(
     DEFAULT_DISCIPLINE_TERMS
   );
+  const [needGithub, setNeedGithub] = useState(false);
+  const [needCurrentDesc, setNeedCurrentDesc] = useState(false);
+  const [needPastDesc, setNeedPastDesc] = useState(false);
   const [gateMode, setGateMode] = useState<GateMode>("any");
   /** Which fields the job ad filled in, so nothing changes silently. */
   const [adFilled, setAdFilled] = useState<string[]>([]);
@@ -258,6 +261,11 @@ export default function RoleIntakeForm() {
       // it was ranked against.
       experienceBand: null,
       disciplineTerms,
+      evidence: {
+        github: needGithub,
+        currentDescription: needCurrentDesc,
+        pastDescription: needPastDesc,
+      },
       weights: DEFAULT_WEIGHTS,
       gateMode,
       criteria,
@@ -265,7 +273,8 @@ export default function RoleIntakeForm() {
     [
       title, variants, locationMode, city, radius, radiusUnit,
       tzMin, tzMax, regions, employmentType, adMinYears, adMaxYears,
-      disciplineTerms, gateMode, criteria,
+      disciplineTerms, needGithub, needCurrentDesc, needPastDesc,
+      gateMode, criteria,
     ]
   );
 
@@ -773,8 +782,105 @@ export default function RoleIntakeForm() {
           </div>
         </Section>
 
+        {/* Evidence */}
+        <Section title="What the profile must show" step={3}>
+          <p className="mb-3 text-xs text-neutral-500">
+            Not requirements about the person, requirements about how much
+            of them is visible. Search returns neither of these, so nothing
+            later in the tool can tell who has them. Requiring one here is
+            the only way to know, and it costs reach rather than credits.
+          </p>
+
+          <label className="flex items-start gap-3 rounded-lg border border-neutral-200 px-3 py-2.5">
+            <input
+              type="checkbox"
+              checked={needGithub}
+              onChange={(e) => setNeedGithub(e.target.checked)}
+              className="mt-0.5 h-4 w-4 accent-neutral-900"
+            />
+            <span>
+              <span className="block text-sm text-neutral-900">
+                A GitHub account with at least one public repo
+              </span>
+              <span className="block text-[11px] text-neutral-500">
+                The only pre-enrichment evidence of what someone has actually
+                built. Around 45% on a live pool, and most of the people it
+                removes write commercial code in private repos.
+              </span>
+            </span>
+          </label>
+
+          <label className="mt-2 flex items-start gap-3 rounded-lg border border-neutral-200 px-3 py-2.5">
+            <input
+              type="checkbox"
+              checked={needPastDesc}
+              onChange={(e) => setNeedPastDesc(e.target.checked)}
+              className="mt-0.5 h-4 w-4 accent-neutral-900"
+            />
+            <span>
+              <span className="block text-sm text-neutral-900">
+                A written description on a past role
+              </span>
+              <span className="block text-[11px] text-neutral-500">
+                Their career in their own words. Broad, around 87% on a live
+                pool, and that is the use: it removes only the people who
+                have written nothing anywhere, who are the ones an
+                enrichment credit is wasted on.
+              </span>
+            </span>
+          </label>
+
+          <label className="mt-2 flex items-start gap-3 rounded-lg border border-neutral-200 px-3 py-2.5">
+            <input
+              type="checkbox"
+              checked={needCurrentDesc}
+              onChange={(e) => setNeedCurrentDesc(e.target.checked)}
+              className="mt-0.5 h-4 w-4 accent-neutral-900"
+            />
+            <span>
+              <span className="block text-sm text-neutral-900">
+                A written description on their current role
+              </span>
+              <span className="block text-[11px] text-neutral-500">
+                What they are doing now, which is the only evidence for a
+                criterion about present-day responsibility. Narrow: around
+                34% on a live pool, because people write a job up after
+                they leave it and leave the current row blank.
+              </span>
+            </span>
+          </label>
+
+          <p className="mt-2 text-[10px] text-neutral-400">
+            Descriptions are matched by looking for common words. No exact
+            presence test exists on this field: an empty one is stored as a
+            blank rather than a null, so the obvious operators return
+            everybody. A few very terse writers will be missed.
+          </p>
+
+          {needCurrentDesc && needPastDesc && (
+            <p className="mt-2 text-[11px] text-neutral-500">
+              Both description boxes require both, not either. That is a
+              much smaller pool than either alone.
+            </p>
+          )}
+
+          {!needGithub && !needCurrentDesc && !needPastDesc && (
+            <p className="mt-3 text-[11px] text-neutral-500">
+              Nothing required, which keeps the pool at its widest. Expect
+              some profiles to arrive with nothing but job titles, and to
+              score thinly for that reason rather than on merit.
+            </p>
+          )}
+          {(needGithub || needCurrentDesc || needPastDesc) && (
+            <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
+              Anyone without this never appears, with no card and no way to
+              judge them. Count the pool before and after to see the cost.
+            </p>
+          )}
+        </Section>
+
         {/* Criteria */}
-        <Section title="Must-haves, filtering the search" step={3}>
+        <Section title="Must-haves, filtering the search" step={4}>
           <p className="mb-3 text-xs text-neutral-500">
             The only things here that reach Crustdata. Seniority, tenure and
             everything else about a person is decided after the pool comes
@@ -817,7 +923,7 @@ export default function RoleIntakeForm() {
           <AddCriterion kind="must" onAdd={addCriterion} onAddSkill={addSkill} />
         </Section>
 
-        <Section title="Must-haves, scoring only" step={4}>
+        <Section title="Must-haves, scoring only" step={5}>
           <p className="mb-3 text-xs text-neutral-500">
             Requirements no field in the data can evidence. They narrow
             nothing, so they never cost you a candidate at search time. Each
@@ -838,7 +944,7 @@ export default function RoleIntakeForm() {
           />
         </Section>
 
-        <Section title="Nice-to-haves, scoring only" step={5}>
+        <Section title="Nice-to-haves, scoring only" step={6}>
           <p className="mb-3 text-xs text-neutral-500">
             These never filter anyone out, whether or not the data could
             support it. They only move the score.

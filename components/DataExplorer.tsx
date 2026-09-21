@@ -79,7 +79,7 @@ export default function DataExplorer() {
       const res = await fetch("/api/enrich", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: selected }),
+        body: JSON.stringify({ id: selected, cohort: "shortlist", count: 20 }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "The enrichment failed.");
@@ -161,7 +161,8 @@ export default function DataExplorer() {
               {enrichment ? (
                 <p className="mt-3 text-xs text-neutral-600">
                   Enriched {enrichment.enrichedAt.slice(0, 16).replace("T", " ")} for{" "}
-                  {enrichment.creditsUsed} credits. Sections requested:{" "}
+                  {enrichment.creditsUsed} credits, {enrichment.records.length}{" "}
+                  profiles ({enrichment.cohort}). Sections requested:{" "}
                   {enrichment.fieldsUsed.join(", ")}.
                 </p>
               ) : (
@@ -170,17 +171,22 @@ export default function DataExplorer() {
                     type="button"
                     onClick={() => void enrich()}
                     disabled={busy}
-                    className="rounded-lg bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
+                    className="rounded-lg border border-neutral-300 px-3 py-1.5 text-xs hover:bg-neutral-100 disabled:opacity-40"
                   >
-                    {busy
-                      ? "Enriching"
-                      : `Enrich all ${dataset.fetched} (about ${dataset.fetched} credits)`}
+                    {busy ? "Enriching" : "Enrich the top 20 (about 34 credits)"}
                   </button>
                   <p className="mt-1 text-[10px] text-neutral-500">
-                    Roughly 1 credit per matched profile, which is about thirty
-                    times the cost of finding them. Adds skills, summary,
-                    GitHub and connection counts. Social posts are never
-                    requested: that add-on is 5 credits a head.
+                    Never the whole pool. Enrichment is 1 to 2 credits a head
+                    against 0.03 to find someone, so all {dataset.fetched} would
+                    cost about {Math.round(dataset.fetched * 1.7)} credits. Use{" "}
+                    <Link
+                      href={`/shortlist/${dataset.id}`}
+                      className="underline underline-offset-2"
+                    >
+                      the ranked page
+                    </Link>{" "}
+                    to choose the twenty and to enrich a control set. Social
+                    posts are never requested: that add-on is 5 credits a head.
                   </p>
                 </div>
               )}

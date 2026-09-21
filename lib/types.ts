@@ -155,6 +155,38 @@ export interface ScoringWeights {
   penaliseStale: boolean;
 }
 
+/**
+ * Evidence the profile must carry for the search to return it.
+ *
+ * These are not requirements about the person, they are requirements about
+ * how much of the person is visible. Search on this plan returns neither
+ * role descriptions nor the GitHub link, so nothing downstream can tell
+ * who has them: the only way to know is to require it in the query and
+ * pay for fewer results.
+ *
+ * Both default off. Requiring GitHub cut one live pool from 164 to 73, and
+ * the 91 it removed are mostly people whose work sits in private repos,
+ * which is most commercial engineering.
+ */
+export interface EvidenceRequirements {
+  /** A GitHub account with at least one public repository. 45% of one live pool. */
+  github: boolean;
+  /**
+   * A description on the CURRENT role. Only 34% of a live pool, because
+   * people write a job up after they leave it and often leave the current
+   * row blank. Narrow, but it is the only evidence of what someone is
+   * doing now, which is what a judged criterion about present-day
+   * responsibility needs.
+   */
+  currentDescription: boolean;
+  /**
+   * A description on any past role. 87% of a live pool. Broad, and that is
+   * the point: it removes the people who have written nothing anywhere,
+   * which is the case that wastes an enrichment credit.
+   */
+  pastDescription: boolean;
+}
+
 export interface RoleBrief {
   title: string;
   titleVariants: TitleVariant[];
@@ -194,6 +226,7 @@ export interface RoleBrief {
    * intake model so the tool is not hardcoded to engineering.
    */
   disciplineTerms: string[];
+  evidence: EvidenceRequirements;
   weights: ScoringWeights;
   gateMode: GateMode;
   criteria: Criterion[];

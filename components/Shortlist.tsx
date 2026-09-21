@@ -53,6 +53,10 @@ export default function Shortlist({ searchId }: { searchId: string }) {
    */
   const [decisions, setDecisions] = useState<Record<string, Decision | undefined>>({});
   const [loadedBand, setLoadedBand] = useState(false);
+  const [enriching, setEnriching] = useState("");
+  const [enrichNote, setEnrichNote] = useState("");
+  const [enrichError, setEnrichError] = useState("");
+  const [cohorts, setCohorts] = useState<Record<string, { n: number; credits: number; at: string }>>({});
 
   const run = useCallback(async () => {
     setBusy(true);
@@ -81,6 +85,34 @@ export default function Shortlist({ searchId }: { searchId: string }) {
     void run();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchId, cut, weights, band]);
+
+  const enrich = async (cohort: "shortlist" | "control", count: number) => {
+    setEnriching(cohort);
+    setEnrichError("");
+    setEnrichNote("");
+    try {
+      const res = await fetch("/api/enrich", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: searchId, cohort, count, weights, experienceBand: band }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? "Enrichment failed.");
+      const e = json.enrichment;
+      setCohorts((prev) => ({
+        ...prev,
+        [cohort]: {
+          n: e.records?.length ?? 0,
+          credits: e.creditsUsed ?? 0,
+          at: e.enrichedAt ?? "",
+        },
+      }));
+      if (json.note) setEnrichNote(json.note);
+    } catch (err) {
+      setEnrichError(err instanceof Error ? err.message : "Enrichment failed.");
+    }
+    setEnriching("");
+  };
 
   const rows = data?.run.rows ?? [];
   const selected = rows.slice(0, data?.run.cut ?? cut);
@@ -321,6 +353,78 @@ export default function Shortlist({ searchId }: { searchId: string }) {
                 not absolute marks. Search returns no skills and no GitHub, so
                 nothing here reflects anyone&apos;s stack.
               </p>
+            </div>
+          )}
+
+          {data && (
+            <div className="rounded-xl border border-neutral-200 bg-white p-4">
+              <h3 className="text-sm font-semibold text-neutral-900">Enrich</h3>
+              <p className="mt-1 text-[11px] text-neutral-500">
+                Buys skills, GitHub, profile summaries and role descriptions,
+                none of which search returns. Roughly 1 credit a head, 2 with
+                GitHub, so about fifty times the cost of finding them. Saved to
+                disk, so scoring against the brief is then free to rerun.
+              </p>
+
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void enrich("shortlist", data.run.cut)}
+                  disabled={enriching !== ""}
+                  className="rounded-lg bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
+                >
+                  {enriching === "shortlist"
+                    ? "Enriching"
+                    : `Enrich the top ${data.run.cut} (about ${Math.round(data.run.cut * 1.7)} credits)`}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void enrich("control", 5)}
+                  disabled={enriching !== ""}
+                  className="rounded-lg border border-dashed border-neutral-400 px-3 py-1.5 text-xs text-neutral-600 disabled:opacity-40"
+                >
+                  {enriching === "control"
+                    ? "Enriching"
+                    : "Enrich 5 controls (about 9 credits)"}
+                </button>
+              </div>
+
+              <p className="mt-1.5 text-[10px] text-neutral-400">
+                The control set is drawn from the bottom half and exists only
+                to check whether this ranking is doing anything. If the five
+                look the same as the top {data.run.cut} once you can see their
+                evidence, the ranker is noise. It writes to{" "}
+                <code className="text-[10px]">.data/enrichments/{data.id}.control.json</code>{" "}
+                and is safe to delete once that is settled.
+              </p>
+
+              {(cohorts.shortlist || cohorts.control) && (
+                <ul className="mt-2 space-y-0.5">
+                  {(
+                    [
+                      ["shortlist", "Shortlist"],
+                      ["control", "Control"],
+                    ] as const
+                  ).map(([k, lbl]) =>
+                    cohorts[k] ? (
+                      <li key={k} className="text-[11px] text-neutral-600">
+                        {lbl}: {cohorts[k].n} profiles, {cohorts[k].credits} credits,{" "}
+                        {cohorts[k].at.slice(0, 16).replace("T", " ")}
+                      </li>
+                    ) : null
+                  )}
+                </ul>
+              )}
+              {enrichNote && (
+                <p className="mt-2 rounded-lg bg-neutral-100 px-3 py-2 text-[11px] text-neutral-600">
+                  {enrichNote}
+                </p>
+              )}
+              {enrichError && (
+                <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
+                  {enrichError}
+                </p>
+              )}
             </div>
           )}
 

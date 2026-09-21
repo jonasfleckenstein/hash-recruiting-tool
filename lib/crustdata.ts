@@ -398,6 +398,90 @@ function criterionCondition(criterion: Criterion, brief: RoleBrief): Condition |
 }
 
 /**
+ * Words used to test whether a role description exists at all.
+ *
+ * There is no clean presence test for this field. `is_null` and
+ * `is_not_null` are documented as element-based and treat a stored empty
+ * string as a value, and `!= ""` is a negated term match that also
+ * matches an absent field. Both return every profile in a pool, which is
+ * demonstrably wrong: on a live 164-profile pool the enrichment showed 17
+ * of 20 with a description, not 20 of 20.
+ *
+ * A positive word match does work, and was validated against four people
+ * whose enrichment had already been read: it returned the two with
+ * descriptions and neither of the two without, on both the current-role
+ * and any-role paths. One word is not enough though, since a terse
+ * description can miss it, so this is OR-ed. Even so the result is a
+ * lower bound, never exact: ten words reached 143 of 164 where "and"
+ * alone reached 139.
+ *
+ * An exact-phrase match on a single space looked like the clean
+ * one-condition answer and is not: `[.] " "` returns zero on every scope,
+ * because the analyser tokenises and a lone space is not a term.
+ */
+export const DESCRIPTION_PROBE_WORDS = [
+  "and", "the", "of", "to", "in", "for", "with", "a", "on", "as",
+];
+
+/** Where a description has to be. Measured on one 164-profile pool:
+ *  current 55, past 142, either 143. Descriptions live on past roles,
+ *  because people write a job up after they leave it. */
+const DESCRIPTION_FIELD = {
+  current: "experience.employment_details.current.description",
+  past: "experience.employment_details.past.description",
+} as const;
+
+/** Any description on a role in the given scope. */
+function hasDescription(scope: keyof typeof DESCRIPTION_FIELD): Condition | null {
+  return anyOf(
+    DESCRIPTION_PROBE_WORDS.map((word) => ({
+      field: DESCRIPTION_FIELD[scope],
+      type: TEXT_OP_ALL_WORDS,
+      value: word,
+    }))
+  );
+}
+
+/** At least one public repository, not merely an account. The stricter
+ *  test costs nothing and drops the eight people in one live pool who had
+ *  an empty GitHub account, which is no use to anyone reading a card. */
+const GITHUB_HAS_REPOS = {
+  field: "dev_platform_profiles.public_repo_count",
+  type: "=>",
+  value: 1,
+};
+
+/**
+ * Conditions for the evidence the operator has asked to require.
+ *
+ * Adding these costs nothing and saves money: price is per result
+ * returned, so a narrower query is a cheaper one. What it costs instead
+ * is reach, and irreversibly, because a profile the query never returns
+ * leaves no card and no trace beyond the count.
+ */
+function evidenceConditions(brief: RoleBrief): Condition[] {
+  const out: Condition[] = [];
+  const want = brief.evidence;
+  if (!want) return out;
+
+  if (want.github) out.push(GITHUB_HAS_REPOS);
+
+  // Two separate conditions, so ticking both means a description on the
+  // current role AND on a past one. That is a real requirement but a rare
+  // one; the common intent is the broader past-role box on its own.
+  if (want.currentDescription) {
+    const c = hasDescription("current");
+    if (c) out.push(c);
+  }
+  if (want.pastDescription) {
+    const c = hasDescription("past");
+    if (c) out.push(c);
+  }
+
+  return out;
+}
+
+/**
  * Build the Crustdata request from a brief.
  *
  *   AND [ or(titles), location, experience range, gate(must-haves) ]
@@ -459,6 +543,8 @@ export function buildCrustdataQuery(brief: RoleBrief, limit = 25): CrustdataQuer
   // values are not documented and it is not autocomplete-enabled, so guessing
   // one would silently return nobody. It travels in the brief and is used for
   // scoring and the outreach draft until a live call confirms the vocabulary.
+
+  for (const condition of evidenceConditions(brief)) and.push(condition);
 
   const gates = brief.criteria
     .filter((c) => c.selected && c.kind === "must" && c.check === "filter")

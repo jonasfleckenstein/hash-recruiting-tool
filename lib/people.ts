@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { IdentifiedEvidence } from "./github";
+import type { PhotoCheck } from "./photo";
 
 const DATA_DIR = path.join(process.cwd(), ".data", "people");
 const REGISTRY = path.join(DATA_DIR, "registry.json");
@@ -66,6 +67,14 @@ export interface Person {
   /** GitHub evidence, absent when the person has no handle. Absent means
    *  unknown, never zero. */
   github: SourceRecord<IdentifiedEvidence> | null;
+  /**
+   * What their profile photo shows.
+   *
+   * Its own source because it is neither Crustdata's claim nor
+   * GitHub's: it is something read off an image, and the card has to be
+   * able to say so.
+   */
+  photo: SourceRecord<PhotoCheck> | null;
 
   firstSeenAt: string;
   /** Every hire whose search surfaced this person. The reason the store
@@ -259,6 +268,7 @@ export async function upsertCrustdata(
       // Keep any GitHub evidence already held: it is fetched separately
       // and a Crustdata refresh says nothing about whether it is stale.
       github: existing?.github ?? null,
+      photo: existing?.photo ?? null,
       firstSeenAt: existing?.firstSeenAt ?? enrichedAt,
       seenInHires: Array.from(new Set([...(existing?.seenInHires ?? []), hireId])),
     };
@@ -281,6 +291,18 @@ export async function attachGithub(
     data: evidence,
   };
   person.githubLogin = evidence.login || person.githubLogin;
+  await writePerson(person);
+  return person;
+}
+
+/** Attach the result of reading someone's profile photo. */
+export async function attachPhoto(
+  internalId: string,
+  check: PhotoCheck
+): Promise<Person | null> {
+  const person = await readPerson(internalId);
+  if (!person) return null;
+  person.photo = { source: "photo", fetchedAt: check.checkedAt, data: check };
   await writePerson(person);
   return person;
 }

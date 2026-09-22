@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import HireNav from "@/components/HireNav";
 import { EXPERIENCE_BANDS, DEFAULT_WEIGHTS, STAGE_RULES } from "@/lib/scoring";
 import type { ScoreRun, ScoredProfile } from "@/lib/scoring";
 import type { ScoringWeights } from "@/lib/types";
@@ -207,30 +208,27 @@ export default function Shortlist({
 
   return (
     <div className="space-y-6">
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-neutral-900">
-            Search results
-          </h1>
-          <p className="mt-1 max-w-2xl text-sm text-neutral-600">
-            Filter and sort further, before spending anything on enrichment.
-          </p>
-        </div>
-        {unpaidSelection ? (
-          <span
-            title="Your selection includes people who have not been enriched, so it is not a stored shortlist yet. Use Enrich and Create new Shortlist below."
-            className="shrink-0 cursor-not-allowed rounded-lg bg-neutral-200 px-4 py-2 text-sm font-medium text-neutral-400"
-          >
-            Shortlists →
-          </span>
-        ) : (
-          <Link
-            href={`/shortlist/${searchId}/candidates`}
-            className="shrink-0 rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800"
-          >
-            Shortlists →
-          </Link>
-        )}
+      {/* Rendered here rather than on the page so the forward button can
+          read the current selection, which is client state. */}
+      <HireNav
+        step="search"
+        back={{ href: "/", label: "All hires" }}
+        forward={{
+          href: `/shortlist/${searchId}/candidates`,
+          label: "Shortlist",
+          disabled: unpaidSelection,
+          title:
+            "Your selection includes people who have not been enriched, so it is not a stored shortlist yet. Use Enrich and Create new Shortlist below.",
+        }}
+      />
+
+      <header>
+        <h1 className="text-2xl font-semibold tracking-tight text-neutral-900">
+          Search results
+        </h1>
+        <p className="mt-1 max-w-2xl text-sm text-neutral-600">
+          Filter and sort further, before spending anything on enrichment.
+        </p>
       </header>
 
       {children}

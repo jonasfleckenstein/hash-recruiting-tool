@@ -2,6 +2,7 @@ import Link from "next/link";
 import { cardsForShortlist } from "@/lib/cards";
 import { listShortlists, readShortlist } from "@/lib/shortlists";
 import CandidateCards from "@/components/CandidateCards";
+import HireNav from "@/components/HireNav";
 
 export const dynamic = "force-dynamic";
 
@@ -39,20 +40,16 @@ export default async function Page({
 
   return (
     <main className="mx-auto max-w-4xl px-6 py-10">
-      <div className="mb-5 flex flex-wrap items-center gap-2">
-        <Link
-          href={`/shortlist/${id}`}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-100"
-        >
-          ← Search results
-        </Link>
-        <Link
-          href="/"
-          className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-100"
-        >
-          All hires
-        </Link>
-      </div>
+      <HireNav
+        step="shortlist"
+        back={{ href: `/shortlist/${id}`, label: "Search results" }}
+        forward={{
+          href: `/shortlist/${id}/matching${active ? `?list=${active.id}` : ""}`,
+          label: "Matching",
+          disabled: cards.length === 0,
+          title: "Nothing enriched yet, so there is nothing to match.",
+        }}
+      />
 
       {lists.length > 1 && (
         <nav className="mb-3 flex flex-wrap items-center gap-2 text-[11px]">
@@ -111,7 +108,21 @@ export default async function Page({
           and enrich them.
         </p>
       ) : (
-        <CandidateCards cards={cards} />
+        <>
+          <CandidateCards cards={cards} />
+
+          {/* The page is for reading the evidence. Judging it against
+              the brief is the next step and a separate one, so the way
+              on sits at the end rather than competing with the cards. */}
+          <div className="mt-8 flex justify-center border-t border-neutral-200 pt-6">
+            <Link
+              href={`/shortlist/${id}/matching${active ? `?list=${active.id}` : ""}`}
+              className="rounded-lg bg-neutral-900 px-5 py-2.5 text-sm font-medium text-white hover:bg-neutral-800"
+            >
+              Take this shortlist to matching →
+            </Link>
+          </div>
+        </>
       )}
     </main>
   );

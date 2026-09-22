@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { Basis, CandidateCard, Claim, Source } from "@/lib/cards";
+import type { Basis, CandidateCard, CardSection, Claim } from "@/lib/cards";
 
 /**
  * A card per candidate, with every claim traceable.
@@ -26,21 +26,37 @@ const BASIS_TITLE: Record<Basis, string> = {
   derived: "Computed from the data above, so only as good as its input.",
 };
 
-function BasisTag({ basis, source }: { basis: Basis; source: Source }) {
+const BASIS_LABEL: Record<Basis, string> = {
+  attested: "attested",
+  "self-reported": "self-reported",
+  derived: "derived",
+};
+
+/**
+ * Provenance for a whole section.
+ *
+ * Carried here rather than on each row. Every section draws on one
+ * source, so a chip beside every claim repeated the same two words and
+ * crowded out the content without adding any honesty.
+ */
+function SectionHead({ section }: { section: CardSection }) {
   return (
-    <span
-      title={BASIS_TITLE[basis]}
-      className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${BASIS_STYLE[basis]}`}
-    >
-      {basis === "self-reported" ? "self-reported" : basis} · {source}
-    </span>
+    <h3 className="flex flex-wrap items-baseline gap-2 text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
+      {section.title}
+      <span
+        title={BASIS_TITLE[section.basis]}
+        className={`rounded px-1.5 py-0.5 text-[10px] font-medium normal-case tracking-normal ${BASIS_STYLE[section.basis]}`}
+      >
+        {BASIS_LABEL[section.basis]}
+      </span>
+    </h3>
   );
 }
 
 function ClaimRow({ claim }: { claim: Claim }) {
   return (
     <li className="flex flex-wrap items-baseline gap-x-2 gap-y-1 border-t border-neutral-100 py-2 first:border-t-0">
-      <span className="w-40 shrink-0 text-[11px] uppercase tracking-wide text-neutral-500">
+      <span className="w-44 shrink-0 text-[11px] uppercase tracking-wide text-neutral-500">
         {claim.label}
       </span>
       <span className="min-w-0 flex-1 text-sm text-neutral-800">
@@ -62,7 +78,6 @@ function ClaimRow({ claim }: { claim: Claim }) {
           </span>
         )}
       </span>
-      <BasisTag basis={claim.basis} source={claim.source} />
     </li>
   );
 }
@@ -74,18 +89,64 @@ function Card({ card }: { card: CandidateCard }) {
   return (
     <article className="rounded-xl border border-neutral-200 bg-white p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="text-base font-semibold text-neutral-900">
-            {card.name}
-          </h2>
-          <p className="mt-0.5 text-sm text-neutral-700">
-            {[card.currentTitle, card.currentCompany].filter(Boolean).join(" at ") ||
-              card.headline ||
-              "Current role not stated"}
-          </p>
-          {card.location && (
-            <p className="text-[11px] text-neutral-500">{card.location}</p>
+        <div className="flex min-w-0 gap-3">
+          {card.photo?.url && (
+            /* Shown while the frame detection is being trusted or not.
+               eslint-disable-next-line @next/next/no-img-element */
+            <img
+              src={card.photo.url}
+              alt=""
+              width={56}
+              height={56}
+              className="h-14 w-14 shrink-0 rounded-full object-cover"
+            />
           )}
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-base font-semibold text-neutral-900">
+                {card.name}
+              </h2>
+              {card.photo?.openToWorkFrame && (
+                <span
+                  title={`The profile photo carries LinkedIn's #OpenToWork frame. Read from the image: ${Math.round(
+                    card.photo.arcGreen * 100
+                  )}% of the lower arc matches the frame green, ${Math.round(
+                    card.photo.topGreen * 100
+                  )}% of the top does, hue spread ${card.photo.hueSpread}°. Inference from pixels, and the photo is only as current as the profile.`}
+                  className="rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-medium text-white"
+                >
+                  LinkedIn: Open to work
+                </span>
+              )}
+              {card.recentlyOpenToWork ? (
+                <span
+                  title={`GitHub says available for hire, and the professional profile read ${
+                    card.openToWorkWindowDays ?? "?"
+                  } days ago did not. So the box was ticked within that window, which makes it a dated signal rather than a checkbox someone set years ago and forgot. Still self-reported, and it affects no ranking.`}
+                  className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-900 ring-1 ring-amber-300"
+                >
+                  GitHub: Open to work (new)
+                </span>
+              ) : (
+                card.openToWork && (
+                  <span
+                    title="Ticked GitHub's Available for hire box. Nobody is ever prompted to untick it, so it is often years old. Self-reported, and it affects no ranking."
+                    className="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-medium text-sky-800"
+                  >
+                    GitHub: Open to work
+                  </span>
+                )
+              )}
+            </div>
+            <p className="mt-0.5 text-sm text-neutral-700">
+              {[card.currentTitle, card.currentCompany].filter(Boolean).join(" at ") ||
+                card.headline ||
+                "Current role not stated"}
+            </p>
+            {card.location && (
+              <p className="text-[11px] text-neutral-500">{card.location}</p>
+            )}
+          </div>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           {card.links.map((l) => (
@@ -102,19 +163,16 @@ function Card({ card }: { card: CandidateCard }) {
         </div>
       </div>
 
-      {card.summary && (
-        <p className="mt-3 border-l-2 border-neutral-200 pl-3 text-sm italic text-neutral-600">
-          {card.summary.length > 320
-            ? `${card.summary.slice(0, 320).trimEnd()}…`
-            : card.summary}
-        </p>
-      )}
-
       {card.sections.map((section) => (
         <section key={section.title} className="mt-4">
-          <h3 className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
-            {section.title}
-          </h3>
+          <SectionHead section={section} />
+          {section.quote && (
+            <p className="mt-1.5 border-l-2 border-neutral-200 pl-3 text-sm italic text-neutral-600">
+              {section.quote.length > 320
+                ? `${section.quote.slice(0, 320).trimEnd()}…`
+                : section.quote}
+            </p>
+          )}
           {section.claims.length > 0 ? (
             <ul className="mt-1">
               {section.claims.map((c, i) => (

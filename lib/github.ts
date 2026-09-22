@@ -214,6 +214,22 @@ export interface GithubEvidence {
    * are exactly the people this happens to, so it has to be visible.
    */
   prWindowTruncated: boolean;
+  /**
+   * GitHub's "Available for hire" checkbox, read live.
+   *
+   * Not scored. It is a toggle people tick once and forget, so it is a
+   * claim about intent rather than evidence of anything, and letting it
+   * move a ranking would put a stale checkbox above real work. Kept
+   * because it is free to read and occasionally worth knowing before
+   * writing to someone.
+   *
+   * null means the account does not set it, which is not the same as
+   * "not looking".
+   */
+  isHireable: boolean | null;
+  /** The one-line self-description on their GitHub profile. Short, and
+   *  often more current than a professional summary written years ago. */
+  bio: string | null;
   reviewsGiven: number;
   externalCommits: number;
   issuesOpened: number;
@@ -315,6 +331,9 @@ export interface GithubTarget {
   login: string;
   /** Company names from the employment history, for employer-repo tagging. */
   employers: string[];
+  /** GitHub's hireable flag as Crustdata last saw it, carried so the
+   *  live read can be checked against the snapshot. */
+  crustdataHireable: boolean | null;
   /** LinkedIn URL, carried through so a resolved handle can be verified. */
   linkedinUrl?: string;
   /** X handle from Crustdata, a second verification signal. */
@@ -331,68 +350,100 @@ function normaliseCompany(value: string): string {
     .replace(/[^a-z0-9]/g, "");
 }
 
-export function targetsFromEnrichment(
-  enrichment: StoredEnrichment
-): { withHandle: GithubTarget[]; withoutHandle: GithubTarget[] } {
+/**
+ * Turn one Crustdata profile into a lookup target.
+ *
+ * `login` is empty when the profile carries no handle; callers split on
+ * that rather than this returning null, because a person with no GitHub
+ * still needs counting.
+ */
+export function buildTarget(person: Record<string, any>): GithubTarget {
+  const employment = person.experience?.employment_details ?? {};
+  const employers: string[] = [
+    ...(employment.current ?? []),
+    ...(employment.past ?? []),
+  ]
+    .map((r: any) => r?.name)
+    .filter((n: unknown): n is string => typeof n === "string" && n.length > 1);
+
+  /**
+   * The handle lives on the dev platform block, NOT on
+   * `social_handles.dev_platform_identifier.profile_url`, which is null
+   * on every profile in every enrichment file written so far, including
+   * the ones that plainly have GitHub accounts. Reading the obvious
+   * path finds nothing and fails silently.
+   */
+  const login = handleFromUrl(person.dev_platform_profiles?.[0]?.profile_url);
+
+  return {
+    crustdataPersonId:
+      typeof person.crustdata_person_id === "number"
+        ? person.crustdata_person_id
+        : null,
+    name: person.basic_profile?.name ?? "Unnamed profile",
+    login: login ?? "",
+    employers: Array.from(new Set(employers)),
+    crustdataHireable:
+      typeof person.dev_platform_profiles?.[0]?.is_hireable === "boolean"
+        ? person.dev_platform_profiles[0].is_hireable
+        : null,
+    linkedinUrl:
+      person.social_handles?.professional_network_identifier?.profile_url ??
+      undefined,
+    twitter: person.social_handles?.twitter_identifier?.slug || undefined,
+    websites: Array.from(
+      new Set(
+        String(person.basic_profile?.summary ?? "").match(
+          /https?:\/\/[^\s),\]]+/g
+        ) ?? []
+      )
+    ),
+  };
+}
+
+/**
+ * Split a set of profiles into those with a handle and those without.
+ *
+ * Takes profiles rather than an enrichment file. The file's `records`
+ * only holds people BOUGHT in that run, so once the person store began
+ * reusing enrichments a run where everyone was already known wrote
+ * `records: []`, and reading handles from there found nobody. The
+ * GitHub step then silently did nothing in exactly the case the store
+ * exists to create.
+ */
+export function splitTargets(profiles: Record<string, any>[]): {
+  withHandle: GithubTarget[];
+  withoutHandle: GithubTarget[];
+} {
   const withHandle: GithubTarget[] = [];
   const withoutHandle: GithubTarget[] = [];
   const seen = new Set<string>();
 
-  for (const record of enrichment.records ?? []) {
-    for (const match of record.matches ?? []) {
-      const person = match.person_data as Record<string, any> | undefined;
-      if (!person) continue;
-
-      const employment = person.experience?.employment_details ?? {};
-      const employers: string[] = [
-        ...(employment.current ?? []),
-        ...(employment.past ?? []),
-      ]
-        .map((r: any) => r?.name)
-        .filter((n: unknown): n is string => typeof n === "string" && n.length > 1);
-
-      const target: GithubTarget = {
-        crustdataPersonId:
-          typeof person.crustdata_person_id === "number"
-            ? person.crustdata_person_id
-            : null,
-        name: person.basic_profile?.name ?? "Unnamed profile",
-        login: "",
-        employers: Array.from(new Set(employers)),
-        linkedinUrl:
-          person.social_handles?.professional_network_identifier?.profile_url ??
-          undefined,
-        twitter:
-          person.social_handles?.twitter_identifier?.slug || undefined,
-        websites: Array.from(
-          new Set(
-            String(person.basic_profile?.summary ?? "").match(
-              /https?:\/\/[^\s),\]]+/g
-            ) ?? []
-          )
-        ),
-      };
-
-      /**
-       * The handle lives on the dev platform block, NOT on
-       * `social_handles.dev_platform_identifier.profile_url`, which is null
-       * on every profile in every enrichment file written so far, including
-       * the ones that plainly have GitHub accounts. Reading the obvious
-       * path finds nothing and fails silently.
-       */
-      const login = handleFromUrl(person.dev_platform_profiles?.[0]?.profile_url);
-
-      if (!login) {
-        withoutHandle.push(target);
-        continue;
-      }
-      if (seen.has(login.toLowerCase())) continue;
-      seen.add(login.toLowerCase());
-      withHandle.push({ ...target, login });
+  for (const profile of profiles) {
+    if (!profile) continue;
+    const target = buildTarget(profile);
+    if (!target.login) {
+      withoutHandle.push(target);
+      continue;
     }
+    if (seen.has(target.login.toLowerCase())) continue;
+    seen.add(target.login.toLowerCase());
+    withHandle.push(target);
   }
 
   return { withHandle, withoutHandle };
+}
+
+export function targetsFromEnrichment(
+  enrichment: StoredEnrichment
+): { withHandle: GithubTarget[]; withoutHandle: GithubTarget[] } {
+  return splitTargets(
+    (enrichment.records ?? []).flatMap((record) =>
+      (record.matches ?? [])
+        .map((m) => m.person_data as Record<string, any> | undefined)
+        .filter((p): p is Record<string, any> => Boolean(p))
+    )
+  );
 }
 
 /* -------------------------------------------------------------------------- */
@@ -557,6 +608,8 @@ fragment Evidence on User {
   name
   createdAt
   url
+  isHireable
+  bio
   socialAccounts(first: 10) { nodes { provider url } }
   repositories(
     first: 1
@@ -675,6 +728,8 @@ function emptyEvidence(login: string): GithubEvidence {
     externalPrsMergedRecent: 0,
     mergedPrsAllTime: 0,
     prWindowTruncated: false,
+    isHireable: null,
+    bio: null,
     reviewsGiven: 0,
     externalCommits: 0,
     issuesOpened: 0,
@@ -713,6 +768,9 @@ function shapeUser(node: any, target: GithubTarget): GithubEvidence {
   evidence.userId = node.databaseId ?? null;
   evidence.displayName = node.name ?? null;
   evidence.accountCreatedAt = node.createdAt ?? null;
+  evidence.isHireable =
+    typeof node.isHireable === "boolean" ? node.isHireable : null;
+  evidence.bio = typeof node.bio === "string" && node.bio.trim() ? node.bio.trim() : null;
   evidence.profileUrl = node.url ?? evidence.profileUrl;
   evidence.socialAccounts = (node.socialAccounts?.nodes ?? [])
     .filter((s: any) => s?.url)

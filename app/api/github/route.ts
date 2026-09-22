@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { readEnrichment } from "@/lib/enrich";
-import { fetchCohort, summariseGithub, targetsFromEnrichment } from "@/lib/github";
+import { fetchCohort, splitTargets, summariseGithub } from "@/lib/github";
 import type { GithubTarget } from "@/lib/github";
-import { attachGithub, findInternalId } from "@/lib/people";
+import { attachGithub, findInternalId, readPerson } from "@/lib/people";
 
 export const runtime = "nodejs";
 
@@ -46,6 +46,7 @@ export async function GET(req: Request) {
         name: login,
         login,
         employers: [],
+        crustdataHireable: null,
         websites: [],
       }));
   } else {
@@ -62,7 +63,25 @@ export async function GET(req: Request) {
         { status: 404 }
       );
     }
-    ({ withHandle, withoutHandle } = targetsFromEnrichment(enrichment));
+
+    /**
+     * Read the people from the store, not from the enrichment's
+     * `records`.
+     *
+     * `records` holds only profiles BOUGHT in that run. Once the store
+     * began reusing enrichments, a run where everyone was already known
+     * wrote an empty `records`, and this step found nobody: the GitHub
+     * read silently did nothing in exactly the case the store exists to
+     * create. `internalIds` covers bought and reused alike.
+     */
+    const people = await Promise.all(
+      (enrichment.internalIds ?? []).map((id) => readPerson(id))
+    );
+    ({ withHandle, withoutHandle } = splitTargets(
+      people
+        .filter((p): p is NonNullable<typeof p> => p !== null)
+        .map((p) => p.crustdata.data as Record<string, any>)
+    ));
   }
 
   try {
@@ -84,6 +103,38 @@ export async function GET(req: Request) {
       if (await attachGithub(internalId, row)) stored += 1;
     }
 
+    /**
+     * Does Crustdata's dev platform snapshot still match GitHub?
+     *
+     * The hireable flag is the one field both sources carry, so it is
+     * the only place the staleness of that snapshot can be measured
+     * rather than assumed. It costs nothing: a scalar on a query that
+     * was already being made.
+     */
+    const byLogin = new Map(
+      withHandle.map((t) => [t.login.toLowerCase(), t.crustdataHireable])
+    );
+    const compared = evidence.filter((e) => e.status === "ok");
+    const readable = compared.filter((e) => e.isHireable !== undefined);
+    /**
+     * Crustdata omits the flag rather than sending false, so within
+     * people who have a dev platform block at all, null and false mean
+     * the same thing. Measured across 25 profiles: every Crustdata
+     * `true` matched GitHub, and every Crustdata `null` was a GitHub
+     * `false`. Treating them as equal is what makes a real flip
+     * visible, instead of drowning it in twenty null-versus-false
+     * rows.
+     */
+    const same = (a: boolean | null, b: boolean | null) => (a ?? false) === (b ?? false);
+    const disagree = readable
+      .filter((e) => !same(byLogin.get(e.login.toLowerCase()) ?? null, e.isHireable))
+      .map((e) => ({
+        name: e.name,
+        login: e.login,
+        crustdata: byLogin.get(e.login.toLowerCase()) ?? null,
+        github: e.isHireable ?? null,
+      }));
+
     return NextResponse.json({
       searchId: searchId || null,
       /**
@@ -98,6 +149,19 @@ export async function GET(req: Request) {
         namesWithoutHandle: withoutHandle.map((t) => t.name),
       },
       stored,
+      hireable: {
+        githubTrue: readable.filter((e) => e.isHireable === true).length,
+        crustdataTrue: readable.filter(
+          (e) => byLogin.get(e.login.toLowerCase()) === true
+        ).length,
+        agree: readable.length - disagree.length,
+        of: readable.length,
+        /** Cached before the field existed, so not comparable until a
+         *  forced refetch. JSON drops an undefined field entirely, which
+         *  would otherwise read as a disagreement. */
+        notRead: compared.length - readable.length,
+        disagree,
+      },
       rate,
       coverage: summariseGithub(evidence),
       evidence,

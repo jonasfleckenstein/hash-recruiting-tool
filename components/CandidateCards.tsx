@@ -82,7 +82,14 @@ function ClaimRow({ claim }: { claim: Claim }) {
   );
 }
 
-function Card({ card }: { card: CandidateCard }) {
+/**
+ * One candidate, in full.
+ *
+ * Exported so the matching page can expand a ranked row into exactly
+ * the same card the shortlist shows. Two renderings of one person
+ * would drift, and the reader would have to learn both.
+ */
+export function Card({ card }: { card: CandidateCard }) {
   const [open, setOpen] = useState(false);
   const described = card.roles.filter((r) => r.description?.trim());
 

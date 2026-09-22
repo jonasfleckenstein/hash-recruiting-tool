@@ -144,6 +144,22 @@ export interface CandidateCard {
 
   sections: CardSection[];
 
+  /**
+   * Numbers already computed while building the card.
+   *
+   * Exposed so a results table can filter and sort on them without
+   * parsing them back out of the prose claims that display them.
+   */
+  facts: {
+    roleCount: number;
+    avgTenureYears: number | null;
+    yearsSinceDegree: number | null;
+    /** Months with any contribution, of the GitHub activity window. */
+    activeMonths: number | null;
+    hasGithub: boolean;
+    openToWork: boolean;
+  };
+
   /** What is known and what is simply absent, stated rather than implied. */
   coverage: {
     crustdataAgeDays: number | null;
@@ -588,6 +604,14 @@ export function buildCard(person: Person): CandidateCard {
     skills,
     languages: bp.languages ?? [],
     sections: [track, githubSection(gh, dev.bio ?? null)],
+    facts: {
+      roleCount: roles.length,
+      avgTenureYears: avgYears === null ? null : Math.round(avgYears * 10) / 10,
+      yearsSinceDegree: sinceDegree,
+      activeMonths: gh?.status === "ok" ? gh.activeMonths : null,
+      hasGithub: gh?.status === "ok",
+      openToWork: gh?.isHireable === true || person.photo?.data.openToWorkFrame === true,
+    },
     coverage: {
       crustdataAgeDays: daysBetween(person.crustdata.fetchedAt),
       github: !gh ? "no_handle" : gh.status === "ok" ? "ok" : "error",

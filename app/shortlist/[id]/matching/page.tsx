@@ -7,6 +7,7 @@ import { readPerson } from "@/lib/people";
 import { readSearch } from "@/lib/search";
 import { readShortlist } from "@/lib/shortlists";
 import CriteriaEditor from "@/components/CriteriaEditor";
+import ExportLinks from "@/components/ExportLinks";
 import HireNav from "@/components/HireNav";
 import MatchResults from "@/components/MatchResults";
 
@@ -103,6 +104,8 @@ export default async function Page({
               roleTitle={search?.brief?.title ?? ""}
             />
           )}
+
+          <ExportLinks searchId={id} list={active?.id} />
         </div>
       )}
     </main>

@@ -22,7 +22,20 @@ const FILE = path.join(process.cwd(), ".data", "decisions.json");
  * make that a scan; one keyed file makes it a lookup.
  */
 
-export type DecisionState = "rejected" | "contacted";
+/**
+ * Where a person stands in one hire.
+ *
+ *  held      good, but not for this role or not now. The state that
+ *            earns its place: without it the second-best candidate
+ *            either stays on the list forever or gets rejected.
+ *  rejected  no.
+ *  contacted written to.
+ *
+ * Shortlisted is not here. That is the tick on the matching page,
+ * which is a list rather than a judgement, and a person can be on it
+ * and held at the same time while someone decides.
+ */
+export type DecisionState = "held" | "rejected" | "contacted";
 
 export interface Decision {
   hireId: string;

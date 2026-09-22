@@ -31,7 +31,14 @@ const STAGE_MODES = [
   { id: "filter", label: "Filter" },
 ] as const;
 
-type Decision = "shortlist" | "hold" | "reject";
+/** One person as the store knows them, keyed by Crustdata id. */
+interface Known {
+  internalId: string;
+  fresh: boolean;
+  hasGithub: boolean;
+  ageDays: number | null;
+  seenInHires: string[];
+}
 
 const PENALTIES: { key: keyof ScoringWeights; label: string }[] = [
   { key: "penaliseGap", label: "Career gap over a year" },
@@ -47,16 +54,25 @@ export default function Shortlist({ searchId }: { searchId: string }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   /**
-   * Shortlist, hold and reject live in memory only for now. Persisting
-   * them belongs with the enrichment step, since a decision made before
-   * anyone has seen a candidate's stack is not worth keeping.
+   * Who the person store already has, by Crustdata id.
+   *
+   * Fetched once and refreshed after each enrichment. Drives both the
+   * badge on a row and the split on the button, so the operator can see
+   * what a selection will actually cost before committing to it.
    */
-  const [decisions, setDecisions] = useState<Record<string, Decision | undefined>>({});
+  const [known, setKnown] = useState<Record<string, Known>>({});
+  /** Rows ticked for enrichment. Ids are Crustdata ids as strings. */
+  const [picked, setPicked] = useState<Set<string>>(new Set());
   const [loadedBand, setLoadedBand] = useState(false);
-  const [enriching, setEnriching] = useState("");
+  const [enriching, setEnriching] = useState(false);
   const [enrichNote, setEnrichNote] = useState("");
   const [enrichError, setEnrichError] = useState("");
-  const [cohorts, setCohorts] = useState<Record<string, { n: number; credits: number; at: string }>>({});
+  /** Result of the last enrichment on this page, for the summary line. */
+  const [lastRun, setLastRun] = useState<{
+    n: number;
+    credits: number;
+    at: string;
+  } | null>(null);
 
   const run = useCallback(async () => {
     setBusy(true);
@@ -86,73 +102,151 @@ export default function Shortlist({ searchId }: { searchId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchId, cut, weights, band]);
 
-  const enrich = async (cohort: "shortlist" | "control", count: number) => {
-    setEnriching(cohort);
+  const loadKnown = useCallback(async () => {
+    try {
+      const res = await fetch("/api/people");
+      const json = await res.json();
+      const next: Record<string, Known> = {};
+      for (const p of json.people ?? []) {
+        next[String(p.crustdataPersonId)] = {
+          internalId: p.internalId,
+          fresh: p.fresh,
+          hasGithub: p.hasGithub,
+          ageDays: p.ageDays,
+          seenInHires: p.seenInHires ?? [],
+        };
+      }
+      setKnown(next);
+    } catch {
+      // The store is an optimisation. Failing to read it means the page
+      // offers to enrich everyone, which is correct, just not cheapest.
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadKnown();
+  }, [loadKnown]);
+
+  /**
+   * Enrich an explicit set of people.
+   *
+   * Named rather than ranked, because the person worth a credit is often
+   * not in the top twenty: a strong candidate the current weights rank
+   * fortieth should be reachable without re-tuning the weights to drag
+   * them up.
+   */
+  const enrichPicked = async () => {
+    if (picked.size === 0) return;
+    setEnriching(true);
     setEnrichError("");
     setEnrichNote("");
     try {
       const res = await fetch("/api/enrich", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: searchId, cohort, count, weights, experienceBand: band }),
+        body: JSON.stringify({
+          id: searchId,
+          crustdataPersonIds: [...picked].map(Number),
+          weights,
+          experienceBand: band,
+        }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "Enrichment failed.");
       const e = json.enrichment;
-      setCohorts((prev) => ({
-        ...prev,
-        [cohort]: {
-          n: e.records?.length ?? 0,
-          credits: e.creditsUsed ?? 0,
-          at: e.enrichedAt ?? "",
-        },
-      }));
-      if (json.note) setEnrichNote(json.note);
+      setLastRun({
+        n: (e.records?.length ?? 0) + (e.reused?.length ?? 0),
+        credits: e.creditsUsed ?? 0,
+        at: e.enrichedAt ?? "",
+      });
+      if (json.spend) {
+        setEnrichNote(
+          `${json.spend.bought} bought, ${json.spend.reused} already known and reused, ${json.spend.creditsUsed} credits spent.`
+        );
+      }
+      setPicked(new Set());
+      await loadKnown();
     } catch (err) {
       setEnrichError(err instanceof Error ? err.message : "Enrichment failed.");
     }
-    setEnriching("");
+    setEnriching(false);
   };
 
   const rows = data?.run.rows ?? [];
   const selected = rows.slice(0, data?.run.cut ?? cut);
   const rest = rows.slice(data?.run.cut ?? cut);
 
+  /** What the current selection would actually cost. */
+  const pickedIds = [...picked];
+  const reusable = pickedIds.filter((id) => known[id]?.fresh).length;
+  const payable = pickedIds.length - reusable;
+
+  const toggle = (id: string) =>
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const pickAllShortlisted = () =>
+    setPicked(new Set(selected.map((r) => String(r.id))));
+
   return (
     <div className="space-y-6">
       <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
-        <aside className="space-y-4 lg:sticky lg:top-6 lg:self-start">
+        {/* Pinned and independently scrollable. With a hundred rows in
+            the list, controls that scroll away are controls you stop
+            using; and a sidebar that is merely sticky becomes unreachable
+            below the fold once it is taller than the viewport. */}
+        <aside className="space-y-4 lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] lg:self-start lg:overflow-y-auto lg:pr-1">
+          {/* Shortlist size first: it is the control with an actual cost
+              attached, since the cut decides how many people enrichment
+              is offered for. The rest only reorder a list that is free
+              to reorder. */}
           <div className="rounded-xl border border-neutral-200 bg-white p-4">
-            <h2 className="text-sm font-semibold text-neutral-900">Seniority</h2>
-            <p className="mt-1 text-[11px] text-neutral-500">
-              Scored, never filtered. Someone outside the band loses points
-              rather than disappearing. Filtering on Crustdata&apos;s
-              experience field cut one pool from 164 to 63 and removed all
-              five of its top-ranked candidates, including a career changer
-              whose engineering years were inside the band.
-            </p>
+            <div className="flex items-baseline justify-between">
+              <label className="text-sm font-semibold text-neutral-900">
+                Shortlist size
+              </label>
+              <span className="font-mono text-[11px] text-neutral-500">{cut}</span>
+            </div>
+            <input
+              type="range"
+              min={5}
+              max={40}
+              step={1}
+              value={cut}
+              onChange={(e) => setCut(Number(e.target.value))}
+              className="mt-2 w-full accent-neutral-900"
+            />
+          </div>
+
+          <div className="rounded-xl border border-neutral-200 bg-white p-4">
+            <h2
+              className="text-sm font-semibold text-neutral-900"
+              title="Scored, never filtered. Someone outside the band loses points rather than disappearing. Filtering on Crustdata's experience field cut one pool from 164 to 63 and removed all five of its top-ranked candidates, including a career changer whose engineering years were inside the band."
+            >
+              Seniority
+            </h2>
             <select
               value={band ?? ""}
               onChange={(e) => setBand(e.target.value || null)}
               className="mt-2 w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-900"
             >
-              <option value="">Let the pool decide</option>
+              {/* Naming the inferred band in the option itself removes the
+                  need for a line underneath explaining what happened. */}
+              <option value="">
+                {data?.run.bandFromPool && data.run.bandLabel
+                  ? `Match this pool's level (${data.run.bandLabel})`
+                  : "Match this pool's level"}
+              </option>
               {EXPERIENCE_BANDS.map((b) => (
                 <option key={b.id} value={b.id}>
                   {b.label} · {b.note}
                 </option>
               ))}
             </select>
-            {data?.run.bandFromPool ? (
-              <p className="mt-1 text-[11px] text-neutral-400">
-                Using {data.run.bandLabel}.
-              </p>
-            ) : (
-              <p className="mt-1 text-[11px] text-neutral-400">
-                Opened from what the job ad asked for. Change it freely,
-                rescoring is free.
-              </p>
-            )}
           </div>
 
           <div className="rounded-xl border border-neutral-200 bg-white p-4">
@@ -277,24 +371,6 @@ export default function Shortlist({ searchId }: { searchId: string }) {
                 normal in design. Turn it off when it does not apply.
               </p>
             </div>
-
-            <div className="mt-4 border-t border-neutral-100 pt-3">
-              <div className="flex items-baseline justify-between">
-                <label className="text-xs font-medium text-neutral-800">
-                  Shortlist size
-                </label>
-                <span className="font-mono text-[11px] text-neutral-500">{cut}</span>
-              </div>
-              <input
-                type="range"
-                min={5}
-                max={40}
-                step={1}
-                value={cut}
-                onChange={(e) => setCut(Number(e.target.value))}
-                className="mt-1 w-full accent-neutral-900"
-              />
-            </div>
           </div>
         </aside>
 
@@ -366,54 +442,53 @@ export default function Shortlist({ searchId }: { searchId: string }) {
                 disk, so scoring against the brief is then free to rerun.
               </p>
 
-              <div className="mt-3 flex flex-wrap gap-2">
+              <div className="mt-3 flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => void enrich("shortlist", data.run.cut)}
-                  disabled={enriching !== ""}
+                  onClick={() => void enrichPicked()}
+                  disabled={enriching || picked.size === 0}
                   className="rounded-lg bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
                 >
-                  {enriching === "shortlist"
+                  {enriching
                     ? "Enriching"
-                    : `Enrich the top ${data.run.cut} (about ${Math.round(data.run.cut * 1.7)} credits)`}
+                    : picked.size === 0
+                      ? "Select people to enrich"
+                      : reusable > 0
+                        ? `Enrich ${payable} (${reusable} already known, free)`
+                        : `Enrich ${payable} (about ${Math.round(payable * 1.7)} credits)`}
                 </button>
                 <button
                   type="button"
-                  onClick={() => void enrich("control", 5)}
-                  disabled={enriching !== ""}
-                  className="rounded-lg border border-dashed border-neutral-400 px-3 py-1.5 text-xs text-neutral-600 disabled:opacity-40"
+                  onClick={pickAllShortlisted}
+                  className="rounded-lg border border-neutral-300 px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-100"
                 >
-                  {enriching === "control"
-                    ? "Enriching"
-                    : "Enrich 5 controls (about 9 credits)"}
+                  Select the top {data.run.cut}
                 </button>
+                {picked.size > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setPicked(new Set())}
+                    className="text-xs text-neutral-500 underline underline-offset-2 hover:text-neutral-900"
+                  >
+                    Clear
+                  </button>
+                )}
               </div>
 
               <p className="mt-1.5 text-[10px] text-neutral-400">
-                The control set is drawn from the bottom half and exists only
-                to check whether this ranking is doing anything. If the five
-                look the same as the top {data.run.cut} once you can see their
-                evidence, the ranker is noise. It writes to{" "}
-                <code className="text-[10px]">.data/enrichments/{data.id}.control.json</code>{" "}
-                and is safe to delete once that is settled.
+                Tick anyone, in or out of the shortlist. A strong candidate
+                the current weights rank fortieth is worth a credit, and
+                dragging them into the top twenty by re-tuning the weights
+                would only distort the ranking for everyone else. People
+                already enriched by any hire within the last month are free
+                and marked in green.
               </p>
 
-              {(cohorts.shortlist || cohorts.control) && (
-                <ul className="mt-2 space-y-0.5">
-                  {(
-                    [
-                      ["shortlist", "Shortlist"],
-                      ["control", "Control"],
-                    ] as const
-                  ).map(([k, lbl]) =>
-                    cohorts[k] ? (
-                      <li key={k} className="text-[11px] text-neutral-600">
-                        {lbl}: {cohorts[k].n} profiles, {cohorts[k].credits} credits,{" "}
-                        {cohorts[k].at.slice(0, 16).replace("T", " ")}
-                      </li>
-                    ) : null
-                  )}
-                </ul>
+              {lastRun && (
+                <p className="mt-2 text-[11px] text-neutral-600">
+                  Last run: {lastRun.n} profiles, {lastRun.credits} credits,{" "}
+                  {lastRun.at.slice(0, 16).replace("T", " ")}
+                </p>
               )}
               {enrichNote && (
                 <p className="mt-2 rounded-lg bg-neutral-100 px-3 py-2 text-[11px] text-neutral-600">
@@ -433,13 +508,9 @@ export default function Shortlist({ searchId }: { searchId: string }) {
               <Row
                 key={r.id}
                 row={r}
-                decision={decisions[r.id]}
-                onDecide={(d) =>
-                  setDecisions((prev) => ({
-                    ...prev,
-                    [r.id]: prev[r.id] === d ? undefined : d,
-                  }))
-                }
+                known={known[String(r.id)]}
+                picked={picked.has(String(r.id))}
+                onToggle={() => toggle(String(r.id))}
               />
             ))}
           </ul>
@@ -449,31 +520,23 @@ export default function Shortlist({ searchId }: { searchId: string }) {
               <summary className="cursor-pointer text-sm font-semibold text-neutral-900">
                 Below the line ({rest.length})
               </summary>
+              <p className="mt-1 text-[11px] text-neutral-500">
+                Still selectable. The cut is a budget, not a judgement.
+              </p>
               <ul className="mt-3 space-y-2">
                 {rest.slice(0, 60).map((r) => (
                   <Row
                     key={r.id}
                     row={r}
                     dim
-                    decision={decisions[r.id]}
-                    onDecide={(d) =>
-                      setDecisions((prev) => ({
-                        ...prev,
-                        [r.id]: prev[r.id] === d ? undefined : d,
-                      }))
-                    }
+                    known={known[String(r.id)]}
+                    picked={picked.has(String(r.id))}
+                    onToggle={() => toggle(String(r.id))}
                   />
                 ))}
               </ul>
             </details>
           )}
-
-          <Link
-            href="/"
-            className="inline-block text-xs text-neutral-500 underline underline-offset-2 hover:text-neutral-900"
-          >
-            Back to the brief
-          </Link>
         </section>
       </div>
     </div>
@@ -487,13 +550,15 @@ function bar(v: number) {
 function Row({
   row,
   dim,
-  decision,
-  onDecide,
+  known,
+  picked,
+  onToggle,
 }: {
   row: ScoredProfile;
   dim?: boolean;
-  decision?: Decision;
-  onDecide: (d: Decision) => void;
+  known?: Known;
+  picked: boolean;
+  onToggle: () => void;
 }) {
   const parts: [string, number][] = [
     ["title", row.parts.title],
@@ -502,25 +567,59 @@ function Row({
     ["tenure", row.parts.tenureHistory],
     ["edu", row.parts.education],
   ];
+  /** Green means already paid for and still current, so ticking this
+   *  person costs nothing. Amber means known but aged out. */
+  const tone = known?.fresh
+    ? "border-emerald-300 bg-emerald-50/40"
+    : known
+      ? "border-amber-200 bg-amber-50/30"
+      : "border-neutral-200 bg-white";
+
   return (
-    <li
-      className={`rounded-xl border p-4 ${
-        decision === "reject"
-          ? "border-neutral-200 bg-neutral-50 opacity-50"
-          : decision === "shortlist"
-            ? "border-emerald-300 bg-white"
-            : "border-neutral-200 bg-white"
-      } ${dim ? "opacity-75" : ""}`}
-    >
+    <li className={`rounded-xl border p-4 ${tone} ${dim ? "opacity-75" : ""}`}>
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="text-sm font-semibold text-neutral-900">
-          <span className="mr-2 font-mono text-[11px] text-neutral-400">
-            {row.rank}
+        <label className="flex cursor-pointer items-baseline gap-2">
+          <input
+            type="checkbox"
+            checked={picked}
+            onChange={onToggle}
+            className="mt-0.5 accent-neutral-900"
+          />
+          <p className="text-sm font-semibold text-neutral-900">
+            <span className="mr-2 font-mono text-[11px] text-neutral-400">
+              {row.rank}
+            </span>
+            {row.name}
+          </p>
+        </label>
+        <div className="flex items-center gap-1.5">
+          {known && (
+            <span
+              title={
+                known.fresh
+                  ? `Enriched ${known.ageDays ?? 0} days ago, across ${known.seenInHires.length} hire(s). Free to include.`
+                  : `Enriched ${known.ageDays} days ago, past the one-month window, so it will refresh and cost a credit.`
+              }
+              className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                known.fresh
+                  ? "bg-emerald-100 text-emerald-800"
+                  : "bg-amber-100 text-amber-900"
+              }`}
+            >
+              {known.fresh ? "Enriched" : "Enriched, stale"}
+            </span>
+          )}
+          {known?.hasGithub && (
+            <span
+              title="Public GitHub evidence has been collected for this person."
+              className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-800"
+            >
+              GitHub
+            </span>
+          )}
+          <span className="ml-1 font-mono text-xs text-neutral-900">
+            {row.score.toFixed(1)}
           </span>
-          {row.name}
-        </p>
-        <div className="flex items-center gap-2">
-          <span className="font-mono text-xs text-neutral-900">{row.score.toFixed(1)}</span>
           {row.linkedinUrl && (
             <a
               href={row.linkedinUrl}
@@ -552,49 +651,47 @@ function Row({
           .join(" · ")}
       </p>
 
-      <div className="mt-2 flex flex-wrap gap-1">
-        {parts.map(([label, v]) => (
+      <div className="mt-2 flex items-end justify-between gap-3">
+        <div className="flex flex-wrap gap-1">
+          {parts.map(([label, v]) => (
+            <span
+              key={label}
+              title={`${label}: ${bar(v)} of this pool`}
+              className={`rounded px-1.5 py-0.5 text-[10px] ${
+                v >= 0.75
+                  ? "bg-emerald-50 text-emerald-700"
+                  : v <= 0.25
+                    ? "bg-amber-50 text-amber-800"
+                    : "bg-neutral-100 text-neutral-600"
+              }`}
+            >
+              {label} {bar(v)}
+            </span>
+          ))}
+          {row.stagePass === true && (
+            <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-700">
+              small-company
+            </span>
+          )}
+          {row.penalties.map((p) => (
+            <span key={p} className="rounded bg-red-50 px-1.5 py-0.5 text-[10px] text-red-800">
+              {p}
+            </span>
+          ))}
+        </div>
+
+        {/* The internal id belongs on the card but not in the way: it is
+            how this person is referred to everywhere after enrichment,
+            and occasionally worth quoting, but it is never the reason to
+            look at them. */}
+        {known && (
           <span
-            key={label}
-            title={`${label}: ${bar(v)} of this pool`}
-            className={`rounded px-1.5 py-0.5 text-[10px] ${
-              v >= 0.75
-                ? "bg-emerald-50 text-emerald-700"
-                : v <= 0.25
-                  ? "bg-amber-50 text-amber-800"
-                  : "bg-neutral-100 text-neutral-600"
-            }`}
+            title={`Internal id, stable across hires. Seen in ${known.seenInHires.length} hire(s).`}
+            className="shrink-0 font-mono text-[10px] text-neutral-400"
           >
-            {label} {bar(v)}
-          </span>
-        ))}
-        {row.stagePass === true && (
-          <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-700">
-            small-company
+            {known.internalId}
           </span>
         )}
-        {row.penalties.map((p) => (
-          <span key={p} className="rounded bg-red-50 px-1.5 py-0.5 text-[10px] text-red-800">
-            {p}
-          </span>
-        ))}
-      </div>
-
-      <div className="mt-2 flex gap-1.5">
-        {(["shortlist", "hold", "reject"] as const).map((d) => (
-          <button
-            key={d}
-            type="button"
-            onClick={() => onDecide(d)}
-            className={`rounded-lg border px-2 py-1 text-[11px] ${
-              decision === d
-                ? "border-neutral-900 bg-neutral-900 text-white"
-                : "border-neutral-300 text-neutral-600 hover:border-neutral-500"
-            }`}
-          >
-            {d}
-          </button>
-        ))}
       </div>
     </li>
   );

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { enrichProfiles, readEnrichment } from "@/lib/enrich";
-import type { EnrichedSelection, EnrichmentCohort } from "@/lib/enrich";
+import type { EnrichedSelection } from "@/lib/enrich";
 import { readSearch } from "@/lib/search";
 import { scoreSearch } from "@/lib/scoring";
 import type { RoleBrief, ScoringWeights } from "@/lib/types";
@@ -22,11 +22,21 @@ export const runtime = "nodejs";
 export async function POST(req: Request) {
   let body: {
     id?: string;
-    cohort?: EnrichmentCohort;
-    /** Shortlist: how many from the top. Control: how many from the bottom. */
+    /** How many from the top of the ranking, when no explicit set is given. */
     count?: number;
+    /**
+     * An explicit set of people to enrich, by Crustdata id.
+     *
+     * Takes precedence over `count`. The rank-based selection is a
+     * convenience for the common case; this exists because the operator
+     * often wants someone the current weights rank 40th, and making them
+     * re-tune the weights to reach that person would be absurd.
+     */
+    crustdataPersonIds?: number[];
     weights?: Partial<ScoringWeights>;
     experienceBand?: string | null;
+    /** Enrich again even if this search already has an enrichment file. */
+    force?: boolean;
   };
   try {
     body = (await req.json()) as typeof body;
@@ -35,7 +45,6 @@ export async function POST(req: Request) {
   }
 
   const id = body.id ?? "";
-  const cohort: EnrichmentCohort = body.cohort === "control" ? "control" : "shortlist";
   const count = Math.min(50, Math.max(1, Math.round(body.count ?? 20)));
 
   const search = id ? await readSearch(id) : null;
@@ -62,15 +71,12 @@ export async function POST(req: Request) {
     if (name && url) urlByName.set(name, url);
   }
 
-  /**
-   * The control cohort is drawn from the bottom half rather than the very
-   * bottom. The last five of a pool are usually broken records rather
-   * than weak candidates, and comparing the top twenty against five
-   * unparseable profiles would prove nothing.
-   */
+  const chosen = new Set(
+    (body.crustdataPersonIds ?? []).map((v) => String(v))
+  );
   const pool =
-    cohort === "control"
-      ? run.rows.slice(Math.floor(run.rows.length / 2)).reverse().slice(0, count)
+    chosen.size > 0
+      ? run.rows.filter((r) => chosen.has(String(r.id)))
       : run.rows.slice(0, count);
 
   const selection: EnrichedSelection[] = pool
@@ -97,10 +103,14 @@ export async function POST(req: Request) {
     );
   }
 
-  // Enriching the same cohort twice is a straight double charge, and the
-  // file on disk already holds the answer.
-  const existing = await readEnrichment(id, cohort);
-  if (existing && !("force" in body)) {
+  /**
+   * Re-running a rank-based enrichment is a straight double charge, and
+   * the file on disk already holds the answer. An explicit selection is
+   * different: the operator has named people, and the person store will
+   * reuse anyone already known, so there is nothing to protect them from.
+   */
+  const existing = await readEnrichment(id);
+  if (existing && chosen.size === 0 && !body.force) {
     return NextResponse.json({
       enrichment: existing,
       note: `Already enriched on ${existing.enrichedAt.slice(0, 16).replace("T", " ")}. Read from disk, nothing spent.`,
@@ -108,7 +118,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const enrichment = await enrichProfiles(id, selection, cohort);
+    const enrichment = await enrichProfiles(id, selection);
     return NextResponse.json({
       enrichment,
       /** Surfaced so the saving from the person store is visible rather

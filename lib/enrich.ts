@@ -47,21 +47,8 @@ export interface EnrichedRecord {
   matches?: { confidence_score?: number; person_data?: Record<string, unknown> }[];
 }
 
-/**
- * Which slice of a search an enrichment covers.
- *
- *  shortlist - the people you intend to contact. The real artifact.
- *  control   - a sample from the bottom of the ranking, enriched only to
- *              check whether the pre-enrichment ranker is doing anything.
- *              If the bottom five look the same as the top twenty on
- *              evidence depth, the ranker is noise and you want to know
- *              before building on it. Delete once that question is
- *              settled; it is measurement, not recruiting.
- */
-export type EnrichmentCohort = "shortlist" | "control";
-
 /** Who was enriched and where they sat in the ranking at the time, so a
- *  cohort can still be interpreted after the weights have moved on. */
+ *  selection can still be interpreted after the weights have moved on. */
 export interface EnrichedSelection {
   url: string;
   name: string;
@@ -82,7 +69,6 @@ export interface ReusedPerson {
 
 export interface StoredEnrichment {
   searchId: string;
-  cohort: EnrichmentCohort;
   enrichedAt: string;
   fieldsUsed: string[];
   creditsUsed: number;
@@ -102,17 +88,15 @@ export interface StoredEnrichment {
   internalIds: string[];
 }
 
-/** Cohorts live in separate files so one never overwrites the other, and
- *  so the control set can be deleted without touching the real work. */
-function fileFor(searchId: string, cohort: EnrichmentCohort): string {
-  return path.join(DATA_DIR, cohort === "control" ? `${searchId}.control.json` : `${searchId}.json`);
+function fileFor(searchId: string): string {
+  return path.join(DATA_DIR, `${searchId}.json`);
 }
 
 async function save(enrichment: StoredEnrichment): Promise<void> {
   try {
     await fs.mkdir(DATA_DIR, { recursive: true });
     await fs.writeFile(
-      fileFor(enrichment.searchId, enrichment.cohort),
+      fileFor(enrichment.searchId),
       JSON.stringify(enrichment, null, 2),
       "utf8"
     );
@@ -123,13 +107,12 @@ async function save(enrichment: StoredEnrichment): Promise<void> {
 }
 
 export async function readEnrichment(
-  searchId: string,
-  cohort: EnrichmentCohort = "shortlist"
+  searchId: string
 ): Promise<StoredEnrichment | null> {
   try {
-    const raw = await fs.readFile(fileFor(searchId, cohort), "utf8");
-    // Cast to a partial: files written before cohorts existed are missing
-    // these keys on disk, whatever the type says.
+    const raw = await fs.readFile(fileFor(searchId), "utf8");
+    // Cast to a partial: files written before the person store existed
+    // are missing these keys on disk, whatever the type says.
     const parsed = JSON.parse(raw) as Partial<StoredEnrichment>;
     return {
       searchId,
@@ -138,7 +121,6 @@ export async function readEnrichment(
       creditsUsed: 0,
       records: [],
       ...parsed,
-      cohort: parsed.cohort ?? "shortlist",
       selection: parsed.selection ?? [],
       reused: parsed.reused ?? [],
       internalIds: parsed.internalIds ?? [],
@@ -183,8 +165,7 @@ async function post(urls: string[], fields: string[], apiKey: string) {
  */
 export async function enrichProfiles(
   searchId: string,
-  selection: EnrichedSelection[],
-  cohort: EnrichmentCohort = "shortlist"
+  selection: EnrichedSelection[]
 ): Promise<StoredEnrichment> {
   const apiKey = process.env.CRUSTDATA_API_KEY;
   if (!apiKey) throw new Error("CRUSTDATA_API_KEY is not set.");
@@ -288,7 +269,6 @@ export async function enrichProfiles(
 
   const enrichment: StoredEnrichment = {
     searchId,
-    cohort,
     enrichedAt,
     fieldsUsed,
     creditsUsed: Number(creditsUsed.toFixed(2)),

@@ -79,7 +79,7 @@ export default function DataExplorer() {
       const res = await fetch("/api/enrich", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: selected, cohort: "shortlist", count: 20 }),
+        body: JSON.stringify({ id: selected, count: 20 }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "The enrichment failed.");
@@ -162,8 +162,11 @@ export default function DataExplorer() {
                 <p className="mt-3 text-xs text-neutral-600">
                   Enriched {enrichment.enrichedAt.slice(0, 16).replace("T", " ")} for{" "}
                   {enrichment.creditsUsed} credits, {enrichment.records.length}{" "}
-                  profiles ({enrichment.cohort}). Sections requested:{" "}
-                  {enrichment.fieldsUsed.join(", ")}.
+                  profiles
+                  {enrichment.reused.length > 0
+                    ? `, plus ${enrichment.reused.length} reused from earlier hires`
+                    : ""}
+                  . Sections requested: {enrichment.fieldsUsed.join(", ")}.
                 </p>
               ) : (
                 <div className="mt-3">
@@ -185,8 +188,9 @@ export default function DataExplorer() {
                     >
                       the ranked page
                     </Link>{" "}
-                    to choose the twenty and to enrich a control set. Social
-                    posts are never requested: that add-on is 5 credits a head.
+                    to pick exactly who is worth it. Anyone already enriched by
+                    another hire in the last month is free. Social posts are
+                    never requested: that add-on is 5 credits a head.
                   </p>
                 </div>
               )}

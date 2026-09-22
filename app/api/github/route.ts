@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { readEnrichment } from "@/lib/enrich";
-import type { EnrichmentCohort } from "@/lib/enrich";
 import { fetchCohort, summariseGithub, targetsFromEnrichment } from "@/lib/github";
 import type { GithubTarget } from "@/lib/github";
 import { attachGithub, findInternalId } from "@/lib/people";
@@ -25,15 +24,12 @@ export const runtime = "nodejs";
  * handle, "unknown" is the honest answer and the cheap one.
  *
  *   GET /api/github?searchId=5ddc6575
- *   GET /api/github?searchId=5ddc6575&cohort=control
  *   GET /api/github?logins=thelartians,atilafassina   (ad hoc)
  *   &force=1   bypass the on-disk cache
  */
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const searchId = url.searchParams.get("searchId") ?? "";
-  const cohort: EnrichmentCohort =
-    url.searchParams.get("cohort") === "control" ? "control" : "shortlist";
   const logins = url.searchParams.get("logins");
   const force = url.searchParams.get("force") === "1";
 
@@ -59,10 +55,10 @@ export async function GET(req: Request) {
         { status: 400 }
       );
     }
-    const enrichment = await readEnrichment(searchId, cohort);
+    const enrichment = await readEnrichment(searchId);
     if (!enrichment) {
       return NextResponse.json(
-        { error: "No enrichment on disk for that searchId and cohort." },
+        { error: "No enrichment on disk for that searchId." },
         { status: 404 }
       );
     }
@@ -90,7 +86,6 @@ export async function GET(req: Request) {
 
     return NextResponse.json({
       searchId: searchId || null,
-      cohort: logins ? null : cohort,
       /**
        * Roughly half of any commercial engineering pool has no public
        * GitHub. That is a property of the pool, not a failure, and the

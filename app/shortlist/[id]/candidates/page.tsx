@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { cardsForShortlist } from "@/lib/cards";
+import { readPerson } from "@/lib/people";
 import { readSearch } from "@/lib/search";
 import { listShortlists, readShortlist } from "@/lib/shortlists";
 import CandidateCards from "@/components/CandidateCards";
+import GithubBackfill from "@/components/GithubBackfill";
 import HireNav from "@/components/HireNav";
 
 export const dynamic = "force-dynamic";
@@ -39,6 +41,23 @@ export default async function Page({
   ]);
   const cards = await cardsForShortlist(id, active?.id);
   const search = await readSearch(id);
+
+  /**
+   * People whose profile carries a GitHub handle but who have no
+   * GitHub record stored.
+   *
+   * The read is free and runs automatically after enrichment, so this
+   * is only ever non-zero when it failed or when the person was
+   * enriched before that step existed. Worth surfacing rather than
+   * leaving their cards to imply they have no public work.
+   */
+  const people = (
+    await Promise.all((active?.internalIds ?? []).map((pid) => readPerson(pid)))
+  ).filter((p): p is NonNullable<typeof p> => p !== null);
+  const missingGithub = people.filter((p) => {
+    const d = p.crustdata.data as Record<string, any>;
+    return Boolean(d.dev_platform_profiles?.[0]?.profile_url) && !p.github;
+  }).length;
 
   return (
     <main className="mx-auto max-w-4xl px-6 py-10">
@@ -111,6 +130,10 @@ export default async function Page({
         </p>
       ) : (
         <>
+          <div className="mb-4">
+            <GithubBackfill searchId={id} missing={missingGithub} />
+          </div>
+
           <CandidateCards
             cards={cards}
             searchId={id}

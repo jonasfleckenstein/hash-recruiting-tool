@@ -133,6 +133,9 @@ export async function askForJson(options: {
   let user = options.user;
   let lastText = "";
   let lastProblem = "";
+  /** Raised on the retry when the first reply was cut off. */
+  let budget = options.maxTokens;
+  let truncated = false;
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const res = await fetch(ENDPOINT, {
@@ -144,7 +147,7 @@ export async function askForJson(options: {
       },
       body: JSON.stringify({
         model: options.model,
-        max_tokens: options.maxTokens,
+        max_tokens: budget,
         ...(ACCEPTS_TEMPERATURE.has(options.model) ? { temperature: 0 } : {}),
         system: options.system,
         messages: prefill
@@ -163,6 +166,7 @@ export async function askForJson(options: {
 
     const data = (await res.json()) as {
       content?: { type: string; text?: string }[];
+      stop_reason?: string;
     };
     const text = (data.content ?? [])
       .filter((block) => block.type === "text")
@@ -170,20 +174,34 @@ export async function askForJson(options: {
       .join("");
 
     lastText = prefill ? `{${text}` : text;
+    truncated = data.stop_reason === "max_tokens";
 
     try {
       return parseJsonReply(lastText);
     } catch (err) {
       lastProblem = err instanceof Error ? err.message : String(err);
-      user = `${options.user}\n\nYour previous reply could not be parsed as JSON: ${lastProblem}\n\nReturn the same content again as one valid JSON object and nothing else. Escape every quote that appears inside a string value.`;
+      /**
+       * A truncated reply is not a formatting mistake, so asking for
+       * the same thing again in the same space produces the same cut.
+       * The retry gets double the room, and is told to drop the
+       * optional prose rather than the structure.
+       */
+      if (truncated) {
+        budget = Math.min(budget * 2, 16000);
+        user = `${options.user}\n\nYour previous reply was cut off before the JSON object closed. Return the same content again, complete and valid, and keep every explanatory field to a few words so it fits.`;
+      } else {
+        user = `${options.user}\n\nYour previous reply could not be parsed as JSON: ${lastProblem}\n\nReturn the same content again as one valid JSON object and nothing else. Escape every quote that appears inside a string value.`;
+      }
     }
   }
 
   // The raw reply goes into the message. Without it, the next failure is
   // another guess at what the model actually wrote.
   throw new Error(
-    `The model did not return valid JSON, even after a retry (${lastProblem}). Reply began: ${lastText
-      .slice(0, 400)
-      .replace(/\s+/g, " ")}`
+    truncated
+      ? `The model's reply was cut off at the token limit twice, even after doubling it to ${budget}. The request is probably too large: shorten the job ad, or raise maxTokens for this call.`
+      : `The model did not return valid JSON, even after a retry (${lastProblem}). Reply began: ${lastText
+          .slice(0, 400)
+          .replace(/\s+/g, " ")}`
   );
 }

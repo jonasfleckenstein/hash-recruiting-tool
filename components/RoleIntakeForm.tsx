@@ -6,11 +6,9 @@ import type { ReactNode } from "react";
 import Combobox from "@/components/Combobox";
 import TitleCombobox from "@/components/TitleCombobox";
 import {
-  ALL_CONTINENTS,
   DEFAULT_FETCH_LIMIT,
   FIELD_CATALOG,
   buildCrustdataQuery,
-  continentsForWindow,
   effectiveTitles,
 } from "@/lib/crustdata";
 import {
@@ -20,31 +18,18 @@ import {
 import type {
   Criterion,
   CriterionKind,
-  EmploymentType,
   GateMode,
-  LocationMode,
   RoleBrief,
   SkillMatch,
   SuggestResult,
   TitleVariant,
 } from "@/lib/types";
 
-const EMPLOYMENT_TYPES: { value: EmploymentType; label: string }[] = [
-  { value: "full_time", label: "Full-time" },
-  { value: "part_time", label: "Part-time" },
-  { value: "contract", label: "Contract" },
-  { value: "internship", label: "Internship" },
-];
-
 /**
  * Preset cities, qualified with their country. The country is what stops
  * "London" resolving to London, Ontario when Crustdata geocodes the string.
  */
 const CITY_PRESETS = ["Berlin, Germany", "London, United Kingdom"];
-
-const TZ_RANGE = Array.from({ length: 27 }, (_, i) => i - 12);
-const tzLabel = (offset: number) =>
-  `UTC${offset >= 0 ? "+" : ""}${offset}`;
 
 const FIELD_OPTIONS = Object.entries(FIELD_CATALOG);
 
@@ -63,19 +48,21 @@ export default function RoleIntakeForm() {
   const [statusNote, setStatusNote] = useState("");
   const [error, setError] = useState("");
 
-  const [locationMode, setLocationMode] = useState<LocationMode>("onsite");
+  /**
+   * Where, as a city and a radius.
+   *
+   * On-site versus remote, and employment type, used to be controls
+   * here. Neither changed who the search returned in any way worth the
+   * screen space: a city and a radius is the whole of what Crustdata
+   * can filter on, and every role this tool has run has been a
+   * full-time hire. They are gone from the form and from the intake
+   * prompt rather than left as defaults nobody touches.
+   */
   const [city, setCity] = useState("");
   const [cityTouched, setCityTouched] = useState(false);
   const [radius, setRadius] = useState(50);
   const [radiusUnit, setRadiusUnit] = useState<"km" | "mi">("km");
-  const [tzMin, setTzMin] = useState(0);
-  const [tzMax, setTzMax] = useState(2);
-  const [regions, setRegions] = useState<string[]>(() => continentsForWindow(0, 2));
-  const [regionsTouched, setRegionsTouched] = useState(false);
 
-  const [employmentType, setEmploymentType] = useState<EmploymentType>("full_time");
-  const [employmentTouched, setEmploymentTouched] = useState(false);
-  const [locationTouched, setLocationTouched] = useState(false);
   /**
    * Seniority the ad asked for, carried but never filtered on.
    *
@@ -125,11 +112,6 @@ export default function RoleIntakeForm() {
   const [searchError, setSearchError] = useState("");
   const [searching, setSearching] = useState(false);
   const router = useRouter();
-
-  // Regions follow the timezone window until the operator edits them by hand.
-  useEffect(() => {
-    if (!regionsTouched) setRegions(continentsForWindow(tzMin, tzMax));
-  }, [tzMin, tzMax, regionsTouched]);
 
   const fetchCities = async (query: string) => {
     const res = await fetch("/api/city-resolve", {
@@ -199,14 +181,6 @@ export default function RoleIntakeForm() {
             setCity(setup.city);
             filled.push("location");
           }
-          if (setup.remote !== null && !locationTouched) {
-            setLocationMode(setup.remote ? "remote" : "onsite");
-            filled.push(setup.remote ? "remote" : "on-site");
-          }
-          if (setup.employmentType && !employmentTouched) {
-            setEmploymentType(setup.employmentType);
-            filled.push("employment type");
-          }
           // Recorded, not applied. It reaches the shortlist page as the
           // opening seniority band and never touches the query. No
           // "touched" guard, because there is no control here to touch.
@@ -231,7 +205,7 @@ export default function RoleIntakeForm() {
         setStatus("error");
       }
     },
-    [title, jd, cityTouched, locationTouched, employmentTouched]
+    [title, jd, cityTouched]
   );
 
   useEffect(() => {
@@ -246,14 +220,16 @@ export default function RoleIntakeForm() {
     () => ({
       title: title.trim(),
       titleVariants: variants,
-      locationMode,
+      // Fixed. The query builder branches on this, and only the city
+      // branch is reachable now that remote is not a control.
+      locationMode: "onsite",
       city,
       radius,
       radiusUnit,
-      tzMin,
-      tzMax,
-      regions,
-      employmentType,
+      tzMin: 0,
+      tzMax: 0,
+      regions: [],
+      employmentType: "full_time",
       minYears: adMinYears,
       maxYears: adMaxYears,
       // Both belong to the ranking step and are set on the shortlist page.
@@ -271,8 +247,8 @@ export default function RoleIntakeForm() {
       criteria,
     }),
     [
-      title, variants, locationMode, city, radius, radiusUnit,
-      tzMin, tzMax, regions, employmentType, adMinYears, adMaxYears,
+      title, variants, city, radius, radiusUnit,
+      adMinYears, adMaxYears,
       disciplineTerms, needGithub, needCurrentDesc, needPastDesc,
       gateMode, criteria,
     ]
@@ -347,6 +323,7 @@ export default function RoleIntakeForm() {
   const mustJudged = musts.filter((c) => c.check === "judge");
   const gateCount = mustFilters.filter((c) => c.selected).length;
   const judgeCount = criteria.filter((c) => c.selected && c.check === "judge").length;
+  void judgeCount;
 
   // Synonyms and hand-added titles sit together: both are the role itself.
   const synonyms = variants.filter((v) => v.tier !== "adjacent");
@@ -437,17 +414,6 @@ export default function RoleIntakeForm() {
       },
     ]);
     return null;
-  };
-
-  const downloadBrief = () => {
-    const payload = JSON.stringify({ brief, query }, null, 2);
-    const blob = new Blob([payload], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${(title.trim() || "role").toLowerCase().replace(/\s+/g, "-")}-brief.json`;
-    a.click();
-    URL.revokeObjectURL(url);
   };
 
   return (
@@ -618,273 +584,120 @@ export default function RoleIntakeForm() {
         </Section>
 
         {/* Where */}
-        <Section title="Where and how" step={2}>
-          <div className="flex gap-2">
-            <Toggle
-              active={locationMode === "onsite"}
-              onClick={() => {
-                setLocationMode("onsite");
-                setLocationTouched(true);
-              }}
-            >
-              On-site or hybrid
-            </Toggle>
-            <Toggle
-              active={locationMode === "remote"}
-              onClick={() => {
-                setLocationMode("remote");
-                setLocationTouched(true);
-              }}
-            >
-              Remote
-            </Toggle>
-          </div>
-
-          {locationMode === "onsite" ? (
-            <div className="mt-4 space-y-3">
-              <div className="flex flex-wrap items-end gap-3">
-                <div>
-                  <p className="mb-1 text-sm font-medium text-neutral-700">City</p>
-                  <div className="w-56">
-                    <Combobox
-                      value={city}
-                      onChange={(v) => {
-                        setCity(v);
-                        setCityTouched(true);
-                      }}
-                      fetchOptions={fetchCities}
-                      placeholder="e.g. Paris"
-                      className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-base font-normal outline-none focus:border-neutral-900"
-                    />
-                  </div>
-                </div>
-                <label className="text-sm font-medium text-neutral-700">
-                  Within
-                  <div className="mt-1 flex">
-                    <input
-                      type="number"
-                      min={1}
-                      value={radius}
-                      onChange={(e) => setRadius(Number(e.target.value) || 1)}
-                      className="w-20 rounded-l-lg border border-neutral-300 bg-white px-3 py-2 text-base font-normal outline-none focus:border-neutral-900"
-                    />
-                    <select
-                      value={radiusUnit}
-                      onChange={(e) => setRadiusUnit(e.target.value as "km" | "mi")}
-                      className="rounded-r-lg border border-l-0 border-neutral-300 bg-white px-2 py-2 text-sm"
-                    >
-                      <option value="km">km</option>
-                      <option value="mi">mi</option>
-                    </select>
-                  </div>
-                </label>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                {CITY_PRESETS.map((preset) => {
-                  const on = preset.toLowerCase() === city.trim().toLowerCase();
-                  return (
-                    <button
-                      key={preset}
-                      type="button"
-                      onClick={() => {
-                        setCity(on ? "" : preset);
-                        setCityTouched(true);
-                      }}
-                      className={chipClass(on)}
-                    >
-                      {preset}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ) : (
-            <div className="mt-4 space-y-3">
-              <div className="flex flex-wrap items-end gap-3">
-                <label className="text-sm font-medium text-neutral-700">
-                  Must overlap from
-                  <select
-                    value={tzMin}
-                    onChange={(e) => setTzMin(Number(e.target.value))}
-                    className="mt-1 block rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm"
-                  >
-                    {TZ_RANGE.map((o) => (
-                      <option key={o} value={o}>
-                        {tzLabel(o)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-sm font-medium text-neutral-700">
-                  to
-                  <select
-                    value={tzMax}
-                    onChange={(e) => setTzMax(Number(e.target.value))}
-                    className="mt-1 block rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm"
-                  >
-                    {TZ_RANGE.map((o) => (
-                      <option key={o} value={o}>
-                        {tzLabel(o)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
+        <Section title="Where" step={2}>
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-end gap-3">
               <div>
-                <p className="text-sm font-medium text-neutral-700">Regions searched</p>
-                <p className="mb-2 text-xs text-neutral-500">
-                  Crustdata has no timezone field, so the window above is converted
-                  into continents for the query and re-checked against the
-                  candidate&apos;s stated location at scoring time.
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {ALL_CONTINENTS.map((region) => {
-                    const on = regions.includes(region);
-                    return (
-                      <button
-                        key={region}
-                        type="button"
-                        onClick={() => {
-                          setRegionsTouched(true);
-                          setRegions((prev) =>
-                            on ? prev.filter((r) => r !== region) : [...prev, region]
-                          );
-                        }}
-                        className={chipClass(on)}
-                      >
-                        {region}
-                      </button>
-                    );
-                  })}
+                <p className="mb-1 text-sm font-medium text-neutral-700">City</p>
+                <div className="w-56">
+                  <Combobox
+                    value={city}
+                    onChange={(v) => {
+                      setCity(v);
+                      setCityTouched(true);
+                    }}
+                    fetchOptions={fetchCities}
+                    placeholder="e.g. Paris"
+                    className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-base font-normal outline-none focus:border-neutral-900"
+                  />
                 </div>
               </div>
+              <label className="text-sm font-medium text-neutral-700">
+                Within
+                <div className="mt-1 flex">
+                  <input
+                    type="number"
+                    min={1}
+                    value={radius}
+                    onChange={(e) => setRadius(Number(e.target.value) || 1)}
+                    className="w-20 rounded-l-lg border border-neutral-300 bg-white px-3 py-2 text-base font-normal outline-none focus:border-neutral-900"
+                  />
+                  <select
+                    value={radiusUnit}
+                    onChange={(e) => setRadiusUnit(e.target.value as "km" | "mi")}
+                    className="rounded-r-lg border border-l-0 border-neutral-300 bg-white px-2 py-2 text-sm"
+                  >
+                    <option value="km">km</option>
+                    <option value="mi">mi</option>
+                  </select>
+                </div>
+              </label>
             </div>
-          )}
-
-          <div className="mt-4">
-            <label className="text-sm font-medium text-neutral-700">
-              Employment type
-              <select
-                value={employmentType}
-                onChange={(e) => {
-                  setEmploymentType(e.target.value as EmploymentType);
-                  setEmploymentTouched(true);
-                }}
-                className="mt-1 block rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm"
-              >
-                {EMPLOYMENT_TYPES.map((t) => (
-                  <option key={t.value} value={t.value}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="flex flex-wrap items-center gap-2">
+              {CITY_PRESETS.map((preset) => {
+                const on = preset.toLowerCase() === city.trim().toLowerCase();
+                return (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => {
+                      setCity(on ? "" : preset);
+                      setCityTouched(true);
+                    }}
+                    className={chipClass(on)}
+                  >
+                    {preset}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </Section>
 
         {/* Evidence */}
         <Section title="What the profile must show" step={3}>
           <p className="mb-3 text-xs text-neutral-500">
-            Not requirements about the person, requirements about how much
-            of them is visible. Search returns neither of these, so nothing
-            later in the tool can tell who has them. Requiring one here is
-            the only way to know, and it costs reach rather than credits.
+            Requirements about how much of someone is visible, not about
+            the person. Anyone without this never appears at all.
           </p>
 
-          <label className="flex items-start gap-3 rounded-lg border border-neutral-200 px-3 py-2.5">
+          <label className="flex items-center gap-3 rounded-lg border border-neutral-200 px-3 py-2.5">
             <input
               type="checkbox"
               checked={needGithub}
               onChange={(e) => setNeedGithub(e.target.checked)}
-              className="mt-0.5 h-4 w-4 accent-neutral-900"
+              className="h-4 w-4 accent-neutral-900"
             />
-            <span>
-              <span className="block text-sm text-neutral-900">
-                A GitHub account with at least one public repo
-              </span>
-              <span className="block text-[11px] text-neutral-500">
-                The only pre-enrichment evidence of what someone has actually
-                built. Around 45% on a live pool, and most of the people it
-                removes write commercial code in private repos.
-              </span>
+            <span className="text-sm text-neutral-900">
+              A GitHub account with at least one public repo
             </span>
           </label>
 
-          <label className="mt-2 flex items-start gap-3 rounded-lg border border-neutral-200 px-3 py-2.5">
+          <label className="mt-2 flex items-center gap-3 rounded-lg border border-neutral-200 px-3 py-2.5">
             <input
               type="checkbox"
               checked={needPastDesc}
               onChange={(e) => setNeedPastDesc(e.target.checked)}
-              className="mt-0.5 h-4 w-4 accent-neutral-900"
+              className="h-4 w-4 accent-neutral-900"
             />
-            <span>
-              <span className="block text-sm text-neutral-900">
-                A written description on a past role
-              </span>
-              <span className="block text-[11px] text-neutral-500">
-                Their career in their own words. Broad, around 87% on a live
-                pool, and that is the use: it removes only the people who
-                have written nothing anywhere, who are the ones an
-                enrichment credit is wasted on.
-              </span>
+            <span className="text-sm text-neutral-900">
+              A written description on a past role
             </span>
           </label>
 
-          <label className="mt-2 flex items-start gap-3 rounded-lg border border-neutral-200 px-3 py-2.5">
+          <label className="mt-2 flex items-center gap-3 rounded-lg border border-neutral-200 px-3 py-2.5">
             <input
               type="checkbox"
               checked={needCurrentDesc}
               onChange={(e) => setNeedCurrentDesc(e.target.checked)}
-              className="mt-0.5 h-4 w-4 accent-neutral-900"
+              className="h-4 w-4 accent-neutral-900"
             />
-            <span>
-              <span className="block text-sm text-neutral-900">
-                A written description on their current role
-              </span>
-              <span className="block text-[11px] text-neutral-500">
-                What they are doing now, which is the only evidence for a
-                criterion about present-day responsibility. Narrow: around
-                34% on a live pool, because people write a job up after
-                they leave it and leave the current row blank.
-              </span>
+            <span className="text-sm text-neutral-900">
+              A written description on their current role
             </span>
           </label>
 
-          <p className="mt-2 text-[10px] text-neutral-400">
-            Descriptions are matched by looking for common words. No exact
-            presence test exists on this field: an empty one is stored as a
-            blank rather than a null, so the obvious operators return
-            everybody. A few very terse writers will be missed.
-          </p>
-
           {needCurrentDesc && needPastDesc && (
             <p className="mt-2 text-[11px] text-neutral-500">
-              Both description boxes require both, not either. That is a
-              much smaller pool than either alone.
-            </p>
-          )}
-
-          {!needGithub && !needCurrentDesc && !needPastDesc && (
-            <p className="mt-3 text-[11px] text-neutral-500">
-              Nothing required, which keeps the pool at its widest. Expect
-              some profiles to arrive with nothing but job titles, and to
-              score thinly for that reason rather than on merit.
-            </p>
-          )}
-          {(needGithub || needCurrentDesc || needPastDesc) && (
-            <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
-              Anyone without this never appears, with no card and no way to
-              judge them. Count the pool before and after to see the cost.
+              Both boxes require both, not either. A much smaller pool.
             </p>
           )}
         </Section>
 
         {/* Criteria */}
-        <Section title="Must-haves, filtering the search" step={4}>
+        <Section title="Must-haves" step={4}>
           <p className="mb-3 text-xs text-neutral-500">
-            The only things here that reach Crustdata. Seniority, tenure and
-            everything else about a person is decided after the pool comes
-            back, on the shortlist page, where changing your mind is free.
+            The only things here that reach Crustdata.
           </p>
 
           <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -905,11 +718,12 @@ export default function RoleIntakeForm() {
             </button>
           </div>
 
-          <p className="mb-3 text-xs text-neutral-500">
-            {gateMode === "any"
-              ? "These narrow the search, but nobody is dropped for missing one. Every miss is reported on their card instead."
-              : "Every one of these is required. A much smaller and more exact pool, at the cost of losing people who simply never listed one of them, with no card and no chance to judge."}
-          </p>
+          {gateMode === "all" && (
+            <p className="mb-3 text-xs text-neutral-500">
+              Every one of these is required. A smaller, more exact pool, at
+              the cost of losing people who simply never listed one of them.
+            </p>
+          )}
           <CriterionList
             items={mustFilters}
             counts={countsById}
@@ -923,15 +737,15 @@ export default function RoleIntakeForm() {
           <AddCriterion kind="must" onAdd={addCriterion} onAddSkill={addSkill} />
         </Section>
 
-        <Section title="Must-haves, scoring only" step={5}>
+        {/* Judged later. One section, because the distinction that
+            mattered here was filter versus judge, and everything in this
+            group is judged. Must versus nice is a matching-page concern. */}
+        <Section title="Judged on the profile" step={5}>
           <p className="mb-3 text-xs text-neutral-500">
-            Requirements no field in the data can evidence. They narrow
-            nothing, so they never cost you a candidate at search time. Each
-            one is read off the profile during scoring and has to be backed by
-            an evidence link.
+            Detected from the job ad, used for matching later.
           </p>
           <CriterionList
-            items={mustJudged}
+            items={[...mustJudged, ...nices]}
             emptyLabel="Nothing yet."
             onUpdate={updateCriterion}
             onRemove={removeCriterion}
@@ -943,66 +757,25 @@ export default function RoleIntakeForm() {
             onAddSkill={addSkill}
           />
         </Section>
-
-        <Section title="Nice-to-haves, scoring only" step={6}>
-          <p className="mb-3 text-xs text-neutral-500">
-            These never filter anyone out, whether or not the data could
-            support it. They only move the score.
-          </p>
-          <CriterionList
-            items={nices}
-            emptyLabel="Nothing yet."
-            onUpdate={updateCriterion}
-            onRemove={removeCriterion}
-          />
-          <AddCriterion kind="nice" onAdd={addCriterion} onAddSkill={addSkill} />
-        </Section>
       </div>
 
       {/* Preview */}
       <aside className="lg:sticky lg:top-6 lg:self-start">
         <div className="rounded-xl border border-neutral-200 bg-white p-4">
-          <h2 className="text-sm font-semibold text-neutral-900">Search query</h2>
-          <p className="mt-1 text-xs text-neutral-500">
-            Exactly what gets posted to Crustdata. Nothing is sent yet.
-          </p>
-
-          <dl className="mt-3 grid grid-cols-3 gap-2 text-xs">
-            <Stat label="Titles" value={String(titlesInQuery)} />
-            <Stat label="Must gates" value={String(gateCount)} />
-            <Stat label="Judged" value={String(judgeCount)} />
-          </dl>
-
-          <pre className="mt-3 max-h-[420px] overflow-auto rounded-lg bg-neutral-950 p-3 text-[11px] leading-relaxed text-neutral-100">
-            {JSON.stringify(query, null, 2)}
-          </pre>
-
-          <div className="mt-3 flex gap-2">
-            <button
-              type="button"
-              onClick={() => void navigator.clipboard.writeText(JSON.stringify(query, null, 2))}
-              className="flex-1 rounded-lg border border-neutral-300 px-3 py-1.5 text-xs hover:bg-neutral-100"
-            >
-              Copy query
-            </button>
-            <button
-              type="button"
-              onClick={downloadBrief}
-              disabled={!title.trim()}
-              className="flex-1 rounded-lg bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
-            >
-              Save brief
-            </button>
-          </div>
-
+          {/* The two things that actually happen here, in the order they
+              happen in. Counting is free and tells you whether the query
+              is any good; fetching costs credits. Everything else that
+              used to sit above them was reference material competing
+              with the only two buttons that matter. */}
           <button
             type="button"
             onClick={() => void checkCount()}
             disabled={counting || !title.trim()}
-            className="mt-2 w-full rounded-lg border border-neutral-300 px-3 py-1.5 text-xs hover:bg-neutral-100 disabled:opacity-40"
+            className="w-full rounded-lg border-2 border-neutral-900 px-3 py-2.5 text-sm font-medium text-neutral-900 hover:bg-neutral-100 disabled:opacity-40"
           >
-            {counting ? "Counting" : "How many people match?"}
+            {counting ? "Counting…" : "1. Check how many matches"}
           </button>
+
           {count && (
             <div
               className={`mt-2 rounded-lg px-3 py-2 ${
@@ -1055,8 +828,16 @@ export default function RoleIntakeForm() {
             </p>
           )}
 
-          <div className="mt-4 border-t border-neutral-200 pt-3">
-            <div className="flex items-end gap-2">
+          <div className="mt-4">
+            <button
+              type="button"
+              onClick={() => void findCandidates()}
+              disabled={searching || !title.trim()}
+              className="w-full rounded-lg bg-neutral-900 px-3 py-2.5 text-sm font-medium text-white disabled:opacity-40"
+            >
+              {searching ? "Fetching…" : "2. Find candidates"}
+            </button>
+            <div className="mt-2 flex items-center gap-2">
               <label className="text-[11px] text-neutral-500">
                 Fetch
                 <input
@@ -1065,37 +846,25 @@ export default function RoleIntakeForm() {
                   max={1000}
                   value={fetchLimit}
                   onChange={(e) => setFetchLimit(e.target.value)}
-                  className="mt-1 block w-20 rounded-lg border border-neutral-300 bg-white px-2 py-1.5 text-sm outline-none focus:border-neutral-900"
+                  className="ml-1 w-20 rounded-lg border border-neutral-300 bg-white px-2 py-1 text-sm outline-none focus:border-neutral-900"
                 />
               </label>
-              <button
-                type="button"
-                onClick={() => void findCandidates()}
-                disabled={searching || !title.trim()}
-                className="flex-1 rounded-lg bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
-              >
-                {searching ? "Fetching" : "Find candidates"}
-              </button>
-            </div>
-            <p className="mt-1 text-[10px] text-neutral-500">
-              {plannedFetch > 0 ? (
-                <>
-                  {plannedFetch.toLocaleString()} profiles at 0.03 credits ={" "}
-                  <span className={plannedFetch > 200 ? "font-semibold" : ""}>
+              <span className="text-[10px] text-neutral-500">
+                {plannedFetch > 0 ? (
+                  <>
                     {(plannedFetch * 0.03).toFixed(2)} credits
-                  </span>
-                  {count?.total !== null &&
-                    count?.total !== undefined &&
-                    !countStale &&
-                    plannedFetch > count.total && (
-                      <> · only {count.total.toLocaleString()} match, so you pay for those</>
-                    )}
-                  . Saved to disk so scoring can be rerun without paying again.
-                </>
-              ) : (
-                <>Enter how many profiles to buy. Maximum 1000 per fetch.</>
-              )}
-            </p>
+                    {count?.total !== null &&
+                      count?.total !== undefined &&
+                      !countStale &&
+                      plannedFetch > count.total && (
+                        <> · only {count.total.toLocaleString()} match</>
+                      )}
+                  </>
+                ) : (
+                  <>Maximum 1000 per fetch.</>
+                )}
+              </span>
+            </div>
           </div>
 
           {searchError && (
@@ -1111,6 +880,17 @@ export default function RoleIntakeForm() {
               push all of the work onto scoring.
             </p>
           )}
+
+          {/* Reference, not a control. Collapsed because it is worth
+              being able to check and never worth reading. */}
+          <details className="mt-4 border-t border-neutral-200 pt-3">
+            <summary className="cursor-pointer text-xs text-neutral-500 hover:text-neutral-900">
+              Search query · {titlesInQuery} titles, {gateCount} filters
+            </summary>
+            <pre className="mt-2 max-h-[360px] overflow-auto rounded-lg bg-neutral-950 p-3 text-[11px] leading-relaxed text-neutral-100">
+              {JSON.stringify(query, null, 2)}
+            </pre>
+          </details>
         </div>
       </aside>
       </div>
@@ -1141,45 +921,12 @@ function Section({
   );
 }
 
-function Toggle({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-lg px-3 py-1.5 text-sm ${
-        active
-          ? "bg-neutral-900 text-white"
-          : "border border-neutral-300 text-neutral-700 hover:bg-neutral-100"
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
 function chipClass(active: boolean) {
   return `rounded-full px-3 py-1 text-sm transition ${
     active
       ? "bg-neutral-900 text-white"
       : "border border-neutral-300 text-neutral-500 hover:border-neutral-400"
   }`;
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg bg-neutral-100 px-2 py-1.5">
-      <dt className="text-[10px] uppercase tracking-wide text-neutral-500">{label}</dt>
-      <dd className="text-sm font-semibold text-neutral-900">{value}</dd>
-    </div>
-  );
 }
 
 function CriterionList({

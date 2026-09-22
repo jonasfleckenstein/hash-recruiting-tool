@@ -81,6 +81,22 @@ export default function Shortlist({
   const [loadedBand, setLoadedBand] = useState(false);
   const [enriching, setEnriching] = useState(false);
   const [enrichError, setEnrichError] = useState("");
+  /**
+   * What is happening right now, in the operator's words.
+   *
+   * The three calls are driven from here rather than chained inside
+   * the enrich route, which is the only way this can be honest: a
+   * server that does all three in one request can report progress only
+   * by guessing at it. Ninety seconds of "Enriching…" with nothing
+   * moving reads as a hang.
+   */
+  const [stage, setStage] = useState<{ step: number; label: string } | null>(
+    null
+  );
+  /** GitHub is free and often the difference between a card worth
+   *  reading and one that is only job titles, so a failure is carried
+   *  forward rather than swallowed. */
+  const [githubFailed, setGithubFailed] = useState(false);
 
   const run = useCallback(async () => {
     setBusy(true);
@@ -147,7 +163,15 @@ export default function Shortlist({
     if (picked.size === 0) return;
     setEnriching(true);
     setEnrichError("");
+    setGithubFailed(false);
+
     try {
+      setStage({
+        step: 1,
+        label: `Buying ${payable} ${payable === 1 ? "profile" : "profiles"} from Crustdata${
+          reusable > 0 ? `, reusing ${reusable}` : ""
+        }`,
+      });
       const res = await fetch("/api/enrich", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -160,16 +184,41 @@ export default function Shortlist({
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "Enrichment failed.");
+      const listId = json.shortlist?.id;
+
+      /**
+       * Both of these are free, and both are useless if nobody
+       * remembers to run them: a card with no GitHub block reads as
+       * "no public work" when it means "never fetched". Failures here
+       * do not undo the enrichment, which is already paid for and on
+       * disk, so they are reported rather than thrown.
+       */
+      setStage({ step: 2, label: "Reading GitHub for anyone with a handle" });
+      try {
+        const gh = await fetch(`/api/github?searchId=${searchId}`);
+        if (!gh.ok) setGithubFailed(true);
+      } catch {
+        setGithubFailed(true);
+      }
+
+      setStage({ step: 3, label: "Checking profile photos" });
+      try {
+        await fetch(`/api/photos?searchId=${searchId}`);
+      } catch {
+        // Nothing depends on this. Rerunnable from the same endpoint.
+      }
+
+      setStage({ step: 4, label: "Opening the shortlist" });
       await loadKnown();
       // Land on the shortlist this run just created, not whichever one
       // happens to be newest by the time the page renders.
-      const listId = json.shortlist?.id;
       router.push(
         `/shortlist/${searchId}/candidates${listId ? `?list=${listId}` : ""}`
       );
     } catch (err) {
       setEnrichError(err instanceof Error ? err.message : "Enrichment failed.");
       setEnriching(false);
+      setStage(null);
     }
   };
 
@@ -234,6 +283,55 @@ export default function Shortlist({
 
   return (
     <div className="space-y-6">
+      {/* A full-screen wait, because the alternative is a button that
+          says "Enriching" for ninety seconds while the page looks
+          ready to be clicked. Each step is a real call, so the label
+          is a report rather than a guess. */}
+      {stage && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/90 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-xl border border-neutral-200 bg-white p-6 shadow-sm">
+            <p className="text-sm font-semibold text-neutral-900">
+              Building your shortlist
+            </p>
+            <ol className="mt-4 space-y-2">
+              {[
+                "Buying profiles from Crustdata",
+                "Reading GitHub",
+                "Checking profile photos",
+                "Opening the shortlist",
+              ].map((label, i) => {
+                const n = i + 1;
+                const done = stage.step > n;
+                const now = stage.step === n;
+                return (
+                  <li
+                    key={label}
+                    className={`flex items-baseline gap-2 text-xs ${
+                      now
+                        ? "text-neutral-900"
+                        : done
+                          ? "text-neutral-400"
+                          : "text-neutral-300"
+                    }`}
+                  >
+                    <span className="w-4 shrink-0 font-mono">
+                      {done ? "✓" : now ? "·" : ""}
+                    </span>
+                    <span className={now ? "font-medium" : ""}>
+                      {now ? stage.label : label}
+                    </span>
+                  </li>
+                );
+              })}
+            </ol>
+            <p className="mt-4 border-t border-neutral-100 pt-3 text-[11px] text-neutral-500">
+              Only the first step costs anything. GitHub and photos are
+              free, and can be rerun later if they fail.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Rendered here rather than on the page so the forward button can
           read the current selection, which is client state. */}
       <HireNav

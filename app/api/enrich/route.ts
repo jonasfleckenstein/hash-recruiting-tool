@@ -7,6 +7,7 @@ import { scoreSearch } from "@/lib/scoring";
 import type { RoleBrief, ScoringWeights } from "@/lib/types";
 
 export const runtime = "nodejs";
+export const maxDuration = 300;
 
 /**
  * Enrich a slice of a saved search, chosen by rank.

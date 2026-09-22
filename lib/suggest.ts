@@ -8,7 +8,6 @@ import type {
   Criterion,
   CriterionKind,
   CriterionSource,
-  EmploymentType,
   RoleSetupHints,
   SkillMatch,
   SuggestResult,
@@ -27,7 +26,7 @@ const MAX_ALTERNATIVES = 8;
  * Cached entries written by an older version then simply miss and get
  * regenerated, instead of feeding a stale shape back into the UI.
  */
-const CACHE_VERSION = "v9";
+const CACHE_VERSION = "v11";
 
 function cacheKey(title: string, jd: string): string {
   const normalized = `${CACHE_VERSION}|${title.trim().toLowerCase()}|${jd.trim()}`;
@@ -97,13 +96,15 @@ Use single words or short phrases that appear INSIDE a job title. Never the whol
 ROLE SETUP
 Read these from the ad when it states them. Return null for anything it does not state. Never infer or guess: these fill in form fields, and a wrong guess is worse than an empty box.
   "city"            - where the role is based, as "City, Country". Null for a remote role with no base.
-  "remote"          - true if the role is remote, false if it is on-site or hybrid, null if unstated.
-  "employment_type" - one of full_time, part_time, contract, internship.
   "min_years"       - minimum years of experience as a number, only if the ad gives one.
   "max_years"       - only if the ad gives an upper bound, which is rare. Usually null.
 
 CRITERIA
-Return "must" and "nice". A must is a requirement the role cannot do without; a nice is a real differentiator. At most ${MAX_CRITERIA_PER_KIND} of each, and fewer is better than padding.
+Return "must" and "nice".
+
+When the ad separates its own requirements into "Must have" and "Nice to have", or any equivalent heading, follow that split exactly. The ad's own judgement about what is essential beats yours. Only decide for yourself when the ad does not say.
+
+A must is a requirement the role cannot do without; a nice is a real differentiator. At most ${MAX_CRITERIA_PER_KIND} of each, and fewer is better than padding.
 
 Each criterion is ONE requirement and carries a "type".
 
@@ -164,7 +165,8 @@ EVERY CRITERION
              the alternatives: "Prior AI/ML, data or product engineering
              background", not "Machine Learning".
   "weight" - 1 (minor), 2 (normal) or 3 (this is most of the decision).
-  "why"    - one short clause saying what the requirement is evidence of.
+  "why"    - at most eight words saying what the requirement is evidence
+             of. Keep it short: a long one risks the reply being cut off.
   "source" - "jd" only if the ad was provided AND states the requirement.
              Otherwise "inferred". Never label an inferred requirement as "jd".
 
@@ -175,7 +177,7 @@ Return only a JSON object, no prose and no code fences:
   "synonyms": [string],
   "adjacent_titles": [{"label": string, "note": string}],
   "discipline_terms": [string],
-  "setup": {"city": string|null, "remote": boolean|null, "employment_type": string|null, "min_years": number|null, "max_years": number|null},
+  "setup": {"city": string|null, "min_years": number|null, "max_years": number|null},
   "must": [{"label": string, "type": "skills"|"background"|"field"|"judge", "skills": [{"label": string, "kind": string}], "backgrounds": [string], "field": string, "match": string, "weight": 1|2|3, "why": string, "source": "jd"|"inferred"}],
   "nice": [ same shape ]
 }
@@ -281,15 +283,19 @@ function parseCriterion(entry: RawCriterion, jdProvided: boolean): Descriptor | 
   return base;
 }
 
+/**
+ * What the ad said about the role itself.
+ *
+ * Remote and employment type used to be read here and used to fill
+ * form controls. Both controls are gone: a city and a radius is the
+ * whole of what Crustdata can filter location on, and employment type
+ * never changed a query. They are left out of the prompt rather than
+ * extracted and ignored, so the model spends its attention on the
+ * fields that do something. The two remaining keys stay in the type at
+ * their nulls for compatibility with briefs saved before this.
+ */
 function parseSetup(raw: unknown): RoleSetupHints {
   const s = (raw ?? {}) as Record<string, unknown>;
-
-  const employment = typeof s.employment_type === "string" ? s.employment_type : "";
-  const employmentType: EmploymentType | null = (
-    ["full_time", "part_time", "contract", "internship"] as const
-  ).includes(employment as EmploymentType)
-    ? (employment as EmploymentType)
-    : null;
 
   /**
    * Null unless the ad gave an actual number.
@@ -308,8 +314,8 @@ function parseSetup(raw: unknown): RoleSetupHints {
 
   return {
     city: typeof s.city === "string" && s.city.trim() ? s.city.trim() : null,
-    remote: typeof s.remote === "boolean" ? s.remote : null,
-    employmentType,
+    remote: null,
+    employmentType: null,
     minYears: asYears(s.min_years),
     maxYears: asYears(s.max_years),
   };
@@ -389,7 +395,11 @@ async function callModel(title: string, jd: string): Promise<unknown> {
       model: SONNET,
       system: SYSTEM_PROMPT,
       user: userContent,
-      maxTokens: 4000,
+      // A real ad produces a long object: two title lists, discipline
+      // terms, and up to twelve criteria each carrying a label, a
+      // reason and a skills array. 4000 truncated the Frontend
+      // Engineer ad mid-object.
+      maxTokens: 8000,
     });
   } catch (err) {
     if (err instanceof MissingApiKeyError) {

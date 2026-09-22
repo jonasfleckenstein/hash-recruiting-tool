@@ -3,6 +3,7 @@ import { readEnrichment } from "@/lib/enrich";
 import type { EnrichmentCohort } from "@/lib/enrich";
 import { fetchCohort, summariseGithub, targetsFromEnrichment } from "@/lib/github";
 import type { GithubTarget } from "@/lib/github";
+import { attachGithub, findInternalId } from "@/lib/people";
 
 export const runtime = "nodejs";
 
@@ -70,6 +71,23 @@ export async function GET(req: Request) {
 
   try {
     const { rate, evidence } = await fetchCohort(withHandle, force);
+
+    /**
+     * Persist evidence against the person, not just the search.
+     *
+     * GitHub is free, so there is no saving to be had here. The reason
+     * is that everything after enrichment addresses people by internal
+     * id, and evidence that only exists in a response body cannot be
+     * read by a card, a score or an export.
+     */
+    let stored = 0;
+    for (const row of evidence) {
+      if (row.status !== "ok" || typeof row.crustdataPersonId !== "number") continue;
+      const internalId = await findInternalId(row.crustdataPersonId);
+      if (!internalId) continue;
+      if (await attachGithub(internalId, row)) stored += 1;
+    }
+
     return NextResponse.json({
       searchId: searchId || null,
       cohort: logins ? null : cohort,
@@ -84,6 +102,7 @@ export async function GET(req: Request) {
         withoutHandle: withoutHandle.length,
         namesWithoutHandle: withoutHandle.map((t) => t.name),
       },
+      stored,
       rate,
       coverage: summariseGithub(evidence),
       evidence,

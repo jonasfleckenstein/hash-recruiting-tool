@@ -79,6 +79,14 @@ export async function POST(req: Request) {
       name: r.name,
       rank: r.rank,
       score: r.score,
+      /**
+       * ScoreRow.id is the Crustdata person id as a string, so the
+       * vendor key travels with the selection and the person store can
+       * be consulted before anything is bought. Joining on the name
+       * here would work until the first person whose name arrives
+       * mis-encoded or duplicated.
+       */
+      crustdataPersonId: Number.isFinite(Number(r.id)) ? Number(r.id) : null,
     }))
     .filter((s) => s.url.length > 0);
 
@@ -100,8 +108,16 @@ export async function POST(req: Request) {
   }
 
   try {
+    const enrichment = await enrichProfiles(id, selection, cohort);
     return NextResponse.json({
-      enrichment: await enrichProfiles(id, selection, cohort),
+      enrichment,
+      /** Surfaced so the saving from the person store is visible rather
+       *  than silently folded into a lower credit count. */
+      spend: {
+        bought: enrichment.records.length,
+        reused: enrichment.reused.length,
+        creditsUsed: enrichment.creditsUsed,
+      },
     });
   } catch (err) {
     return NextResponse.json(

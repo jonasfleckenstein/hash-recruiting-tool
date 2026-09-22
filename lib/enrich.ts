@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { CRUSTDATA_API_VERSION } from "./crustdata";
+import { noteHire, planEnrichment, upsertCrustdata } from "./people";
+import type { Person } from "./people";
 
 const ENRICH_ENDPOINT = "https://api.crustdata.com/person/enrich";
 const DATA_DIR = path.join(process.cwd(), ".data", "enrichments");
@@ -65,6 +67,17 @@ export interface EnrichedSelection {
   name: string;
   rank: number;
   score: number;
+  /** The vendor id, carried so the person store can be consulted before
+   *  anything is bought. Null only for rows that arrived without one. */
+  crustdataPersonId: number | null;
+}
+
+/** One person who cost nothing because the store already had them. */
+export interface ReusedPerson {
+  internalId: string;
+  crustdataPersonId: number;
+  name: string;
+  ageDays: number | null;
 }
 
 export interface StoredEnrichment {
@@ -75,7 +88,18 @@ export interface StoredEnrichment {
   creditsUsed: number;
   /** The ranking snapshot these profiles were drawn from. */
   selection: EnrichedSelection[];
+  /** Profiles bought in this run. */
   records: EnrichedRecord[];
+  /**
+   * People this run did NOT pay for, because another hire had already
+   * enriched them recently. The whole point of the person store, and
+   * worth recording per run so the saving is visible rather than
+   * invisible.
+   */
+  reused: ReusedPerson[];
+  /** Everyone in this cohort, bought or reused, by internal id. The
+   *  handle downstream steps should use. */
+  internalIds: string[];
 }
 
 /** Cohorts live in separate files so one never overwrites the other, and
@@ -116,6 +140,8 @@ export async function readEnrichment(
       ...parsed,
       cohort: parsed.cohort ?? "shortlist",
       selection: parsed.selection ?? [],
+      reused: parsed.reused ?? [],
+      internalIds: parsed.internalIds ?? [],
     };
   } catch {
     return null;
@@ -142,12 +168,18 @@ async function post(urls: string[], fields: string[], apiKey: string) {
 }
 
 /**
- * Enrich a set of profile URLs and keep the result.
+ * Enrich a set of profiles and keep the result.
  *
- * Roughly 1 credit per matched profile. A `redacted` status means the
- * person asked Crustdata to remove their data: nothing is billed and
- * retrying will not change it, which is worth surfacing rather than
- * treating as a failure.
+ * Consults the person store first. A profile someone else's hire
+ * enriched inside the freshness window is reused rather than re-bought,
+ * which at roughly a credit a head is the difference between a search
+ * being cheap to explore and expensive to repeat. A frontend hire and a
+ * full-stack hire surface many of the same people; the second should pay
+ * for the difference, not the overlap.
+ *
+ * A `redacted` status means the person asked Crustdata to remove their
+ * data: nothing is billed and retrying will not change it, which is
+ * worth surfacing rather than treating as a failure.
  */
 export async function enrichProfiles(
   searchId: string,
@@ -157,7 +189,50 @@ export async function enrichProfiles(
   const apiKey = process.env.CRUSTDATA_API_KEY;
   if (!apiKey) throw new Error("CRUSTDATA_API_KEY is not set.");
 
-  const urls = Array.from(new Set(selection.map((s) => s.url)));
+  /**
+   * Decide what to buy before buying anything.
+   *
+   * Rows without a vendor id cannot be checked against the store, so
+   * they are treated as new. That is the safe direction: the cost of
+   * being wrong is one credit, against a wrong reuse serving stale data
+   * as if it were current.
+   */
+  const withId = selection.filter(
+    (s): s is EnrichedSelection & { crustdataPersonId: number } =>
+      typeof s.crustdataPersonId === "number"
+  );
+  const plans = await planEnrichment(withId.map((s) => s.crustdataPersonId));
+  const planById = new Map(
+    plans.map((p, i) => [withId[i].crustdataPersonId, p] as const)
+  );
+
+  const reused: ReusedPerson[] = [];
+  const internalIds: string[] = [];
+  const toBuy: EnrichedSelection[] = [];
+
+  for (const row of selection) {
+    const plan =
+      typeof row.crustdataPersonId === "number"
+        ? planById.get(row.crustdataPersonId)
+        : undefined;
+
+    if (plan && plan.action === "reuse") {
+      // Costs nothing, but the hire still needs recording against the
+      // person so "who has this come up for" stays answerable.
+      await noteHire(plan.person.internalId, searchId);
+      reused.push({
+        internalId: plan.person.internalId,
+        crustdataPersonId: plan.person.crustdataPersonId,
+        name: plan.person.name,
+        ageDays: plan.ageDays,
+      });
+      internalIds.push(plan.person.internalId);
+      continue;
+    }
+    toBuy.push(row);
+  }
+
+  const urls = Array.from(new Set(toBuy.map((s) => s.url))).filter(Boolean);
   const wanted = [...CORE_FIELDS, ...GATED_FIELDS];
   let fieldsUsed = wanted;
   let creditsUsed = 0;
@@ -187,14 +262,40 @@ export async function enrichProfiles(
     if (Array.isArray(result.body)) records.push(...(result.body as EnrichedRecord[]));
   }
 
+  const enrichedAt = new Date().toISOString();
+
+  /**
+   * Write every bought profile into the store before returning.
+   *
+   * This is what makes the next hire cheap, so it happens here rather
+   * than being left to a caller who might forget. A store write failing
+   * must not lose data already paid for, so failures are swallowed per
+   * person and the run still returns its records.
+   */
+  for (const record of records) {
+    for (const match of record.matches ?? []) {
+      const data = match.person_data as Record<string, any> | undefined;
+      if (!data) continue;
+      let person: Person | null = null;
+      try {
+        person = await upsertCrustdata(data, searchId, enrichedAt);
+      } catch {
+        person = null;
+      }
+      if (person) internalIds.push(person.internalId);
+    }
+  }
+
   const enrichment: StoredEnrichment = {
     searchId,
     cohort,
-    enrichedAt: new Date().toISOString(),
+    enrichedAt,
     fieldsUsed,
     creditsUsed: Number(creditsUsed.toFixed(2)),
     selection,
     records,
+    reused,
+    internalIds: Array.from(new Set(internalIds)),
   };
 
   await save(enrichment);

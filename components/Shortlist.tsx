@@ -514,7 +514,7 @@ export default function Shortlist({
               </div>
 
               {picked.size > 0 && (
-                <p className="mt-2 text-[11px] text-neutral-600">
+                <p className="mt-2 text-right text-[11px] text-neutral-600">
                   {picked.size} selected
                   {reusable > 0 && ` · ${reusable} already enriched, free`}
                   {payable > 0 &&

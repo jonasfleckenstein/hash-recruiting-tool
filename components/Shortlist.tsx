@@ -473,6 +473,12 @@ export default function Shortlist({ searchId }: { searchId: string }) {
                     Clear
                   </button>
                 )}
+                <Link
+                  href={`/shortlist/${searchId}/candidates`}
+                  className="ml-auto rounded-lg border border-neutral-300 px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-100"
+                >
+                  Shortlist →
+                </Link>
               </div>
 
               <p className="mt-1.5 text-[10px] text-neutral-400">
@@ -576,13 +582,35 @@ function Row({
       : "border-neutral-200 bg-white";
 
   return (
-    <li className={`rounded-xl border p-4 ${tone} ${dim ? "opacity-75" : ""}`}>
+    <li
+      role="button"
+      tabIndex={0}
+      aria-pressed={picked}
+      onClick={() => {
+        // Let someone copy a name without that counting as a click.
+        if ((window.getSelection()?.toString().length ?? 0) > 0) return;
+        onToggle();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onToggle();
+        }
+      }}
+      className={`cursor-pointer rounded-xl border p-4 transition-colors ${tone} ${
+        picked ? "ring-2 ring-neutral-900 ring-offset-1" : "hover:border-neutral-400"
+      } ${dim ? "opacity-75" : ""}`}
+    >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <label className="flex cursor-pointer items-baseline gap-2">
+        <div className="flex items-baseline gap-2">
           <input
             type="checkbox"
             checked={picked}
             onChange={onToggle}
+            // The row already toggles, so without this the click would
+            // be handled twice and cancel itself out.
+            onClick={(e) => e.stopPropagation()}
+            aria-label={`Select ${row.name} for enrichment`}
             className="mt-0.5 accent-neutral-900"
           />
           <p className="text-sm font-semibold text-neutral-900">
@@ -591,7 +619,7 @@ function Row({
             </span>
             {row.name}
           </p>
-        </label>
+        </div>
         <div className="flex items-center gap-1.5">
           {known && (
             <span
@@ -625,6 +653,7 @@ function Row({
               href={row.linkedinUrl}
               target="_blank"
               rel="noreferrer"
+              onClick={(e) => e.stopPropagation()}
               className="text-[11px] text-neutral-500 underline underline-offset-2 hover:text-neutral-900"
             >
               profile

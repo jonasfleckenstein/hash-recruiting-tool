@@ -45,12 +45,6 @@ export default async function Page() {
         >
           Start a new hire
         </Link>
-        <Link
-          href="/data"
-          className="rounded-lg border border-neutral-300 px-4 py-2 text-sm hover:bg-neutral-100"
-        >
-          Saved data
-        </Link>
       </div>
 
       {store.people > 0 && (

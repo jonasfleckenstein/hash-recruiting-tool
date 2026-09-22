@@ -11,31 +11,30 @@ export default async function Page({
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">
+      <div className="mb-5">
+        <Link
+          href="/"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-100"
+        >
+          ← All hires
+        </Link>
+      </div>
+
       <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <Link
-            href="/"
-            className="text-xs text-neutral-500 hover:text-neutral-900"
-          >
-            ← All hires
-          </Link>
-          <h1 className="mt-2 text-2xl font-semibold tracking-tight text-neutral-900">
-            Shortlist
+          <h1 className="text-2xl font-semibold tracking-tight text-neutral-900">
+            Search results
           </h1>
           <p className="mt-1 max-w-2xl text-sm text-neutral-600">
-            Ranked on the search data alone, before spending anything on
-            enrichment. Every signal is a position within this pool, so the
-            scores describe the field as much as the person.
+            Filter and sort further, before spending anything on enrichment.
           </p>
         </div>
-        <div className="flex gap-2">
-          <Link
-            href="/data"
-            className="rounded-lg border border-neutral-300 px-3 py-1.5 text-xs hover:bg-neutral-100"
-          >
-            Saved data
-          </Link>
-        </div>
+        <Link
+          href={`/shortlist/${id}/candidates`}
+          className="shrink-0 rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800"
+        >
+          Shortlist →
+        </Link>
       </header>
 
       {/* What the search was. Rendered on the server from the saved brief,

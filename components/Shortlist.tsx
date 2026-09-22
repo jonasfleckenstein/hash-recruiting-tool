@@ -4,6 +4,12 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import HireNav from "@/components/HireNav";
+import {
+  ElsewhereNote,
+  RejectButton,
+  useDecisions,
+} from "@/components/Decisions";
+import type { Decision, DecisionState } from "@/lib/decisions";
 import { EXPERIENCE_BANDS, DEFAULT_WEIGHTS, STAGE_RULES } from "@/lib/scoring";
 import type { ScoreRun, ScoredProfile } from "@/lib/scoring";
 import type { ScoringWeights } from "@/lib/types";
@@ -168,6 +174,16 @@ export default function Shortlist({
   };
 
   const rows = data?.run.rows ?? [];
+  const decisions = useDecisions(searchId, data?.title ?? "");
+
+  /**
+   * A rejected person stays on the page but leaves every selection.
+   * Hiding them would lose the record of having looked; keeping them
+   * selectable would let a rejection be spent on by accident.
+   */
+  const rejected = (id: string | number) =>
+    decisions.here[String(id)] === "rejected";
+
   const selected = rows.slice(0, data?.run.cut ?? cut);
   const rest = rows.slice(data?.run.cut ?? cut);
 
@@ -188,12 +204,16 @@ export default function Shortlist({
     setPicked((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
-      else next.add(id);
+      else if (!rejected(id)) next.add(id);
       return next;
     });
 
   const pickAllShortlisted = () =>
-    setPicked(new Set(selected.map((r) => String(r.id))));
+    setPicked(
+      new Set(
+        selected.filter((r) => !rejected(r.id)).map((r) => String(r.id))
+      )
+    );
 
   /**
    * Everyone the store has ever enriched, anywhere in the ranking.
@@ -204,7 +224,13 @@ export default function Shortlist({
    * the count under the buttons says so.
    */
   const pickAllKnown = () =>
-    setPicked(new Set(rows.filter((r) => known[String(r.id)]).map((r) => String(r.id))));
+    setPicked(
+      new Set(
+        rows
+          .filter((r) => known[String(r.id)] && !rejected(r.id))
+          .map((r) => String(r.id))
+      )
+    );
 
   return (
     <div className="space-y-6">
@@ -536,6 +562,15 @@ export default function Shortlist({
                 known={known[String(r.id)]}
                 picked={picked.has(String(r.id))}
                 onToggle={() => toggle(String(r.id))}
+                decision={decisions.here[String(r.id)]}
+                elsewhere={decisions.other[String(r.id)]}
+                onSetDecision={(s) =>
+                  void decisions.set(
+                    Number(r.id),
+                    s,
+                    known[String(r.id)]?.internalId
+                  )
+                }
               />
             ))}
           </ul>
@@ -557,6 +592,15 @@ export default function Shortlist({
                     known={known[String(r.id)]}
                     picked={picked.has(String(r.id))}
                     onToggle={() => toggle(String(r.id))}
+                    decision={decisions.here[String(r.id)]}
+                    elsewhere={decisions.other[String(r.id)]}
+                    onSetDecision={(s) =>
+                      void decisions.set(
+                        Number(r.id),
+                        s,
+                        known[String(r.id)]?.internalId
+                      )
+                    }
                   />
                 ))}
               </ul>
@@ -578,12 +622,18 @@ function Row({
   known,
   picked,
   onToggle,
+  decision,
+  elsewhere,
+  onSetDecision,
 }: {
   row: ScoredProfile;
   dim?: boolean;
   known?: Known;
   picked: boolean;
   onToggle: () => void;
+  decision?: DecisionState;
+  elsewhere?: Decision[];
+  onSetDecision: (state: DecisionState | null) => void;
 }) {
   const parts: [string, number][] = [
     ["title", row.parts.title],
@@ -592,13 +642,16 @@ function Row({
     ["tenure", row.parts.tenureHistory],
     ["edu", row.parts.education],
   ];
+  const rejected = decision === "rejected";
   /** Green means already paid for and still current, so ticking this
    *  person costs nothing. Amber means known but aged out. */
-  const tone = known?.fresh
-    ? "border-emerald-300 bg-emerald-50/40"
-    : known
-      ? "border-amber-200 bg-amber-50/30"
-      : "border-neutral-200 bg-white";
+  const tone = rejected
+    ? "border-neutral-200 bg-neutral-50"
+    : known?.fresh
+      ? "border-emerald-300 bg-emerald-50/40"
+      : known
+        ? "border-amber-200 bg-amber-50/30"
+        : "border-neutral-200 bg-white";
 
   return (
     <li
@@ -606,25 +659,32 @@ function Row({
       tabIndex={0}
       aria-pressed={picked}
       onClick={() => {
+        if (rejected) return;
         // Let someone copy a name without that counting as a click.
         if ((window.getSelection()?.toString().length ?? 0) > 0) return;
         onToggle();
       }}
       onKeyDown={(e) => {
+        if (rejected) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           onToggle();
         }
       }}
-      className={`cursor-pointer rounded-xl border p-4 transition-colors ${tone} ${
-        picked ? "ring-2 ring-neutral-900 ring-offset-1" : "hover:border-neutral-400"
-      } ${dim ? "opacity-75" : ""}`}
+      className={`rounded-xl border p-4 transition-colors ${tone} ${
+        rejected
+          ? "opacity-45"
+          : picked
+            ? "cursor-pointer ring-2 ring-neutral-900 ring-offset-1"
+            : "cursor-pointer hover:border-neutral-400"
+      } ${dim && !rejected ? "opacity-75" : ""}`}
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <div className="flex items-baseline gap-2">
           <input
             type="checkbox"
             checked={picked}
+            disabled={rejected}
             onChange={onToggle}
             // The row already toggles, so without this the click would
             // be handled twice and cancel itself out.
@@ -728,18 +788,21 @@ function Row({
           ))}
         </div>
 
-        {/* The internal id belongs on the card but not in the way: it is
-            how this person is referred to everywhere after enrichment,
-            and occasionally worth quoting, but it is never the reason to
-            look at them. */}
-        {known && (
-          <span
-            title={`Internal id, stable across hires. Seen in ${known.seenInHires.length} hire(s).`}
-            className="shrink-0 font-mono text-[10px] text-neutral-400"
-          >
-            {known.internalId}
-          </span>
-        )}
+        {/* The reject toggle sits where the internal id used to. An id
+            is a reference number; a decision is the thing you came to
+            the row to make. */}
+        <div className="flex shrink-0 items-center gap-2">
+          <ElsewhereNote decisions={elsewhere} />
+          {known && (
+            <span
+              title={`Internal id, stable across hires. Seen in ${known.seenInHires.length} hire(s).`}
+              className="font-mono text-[10px] text-neutral-300"
+            >
+              {known.internalId}
+            </span>
+          )}
+          <RejectButton state={decision} onSet={onSetDecision} />
+        </div>
       </div>
     </li>
   );

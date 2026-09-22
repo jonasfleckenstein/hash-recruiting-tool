@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { cardsForShortlist } from "@/lib/cards";
+import { readSearch } from "@/lib/search";
 import { listShortlists, readShortlist } from "@/lib/shortlists";
 import CandidateCards from "@/components/CandidateCards";
 import HireNav from "@/components/HireNav";
@@ -37,6 +38,7 @@ export default async function Page({
     readShortlist(id, requested),
   ]);
   const cards = await cardsForShortlist(id, active?.id);
+  const search = await readSearch(id);
 
   return (
     <main className="mx-auto max-w-4xl px-6 py-10">
@@ -109,7 +111,11 @@ export default async function Page({
         </p>
       ) : (
         <>
-          <CandidateCards cards={cards} />
+          <CandidateCards
+            cards={cards}
+            searchId={id}
+            roleTitle={search?.brief?.title ?? ""}
+          />
 
           {/* The page is for reading the evidence. Judging it against
               the brief is the next step and a separate one, so the way

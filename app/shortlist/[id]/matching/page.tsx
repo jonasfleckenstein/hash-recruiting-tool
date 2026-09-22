@@ -2,7 +2,9 @@ import Link from "next/link";
 import { cardsForShortlist } from "@/lib/cards";
 import { judgeCohort } from "@/lib/judge";
 import { readMatchSet } from "@/lib/matching";
+import { readSelection } from "@/lib/outreach";
 import { readPerson } from "@/lib/people";
+import { readSearch } from "@/lib/search";
 import { readShortlist } from "@/lib/shortlists";
 import CriteriaEditor from "@/components/CriteriaEditor";
 import HireNav from "@/components/HireNav";
@@ -47,6 +49,8 @@ export default async function Page({
     matchSet.context,
     true
   );
+  const selection = await readSelection(id);
+  const search = await readSearch(id);
 
   return (
     <main className="mx-auto max-w-4xl px-6 py-10">
@@ -55,6 +59,12 @@ export default async function Page({
         back={{
           href: `/shortlist/${id}/candidates${active ? `?list=${active.id}` : ""}`,
           label: "Shortlist",
+        }}
+        forward={{
+          href: `/shortlist/${id}/outreach${active ? `?list=${active.id}` : ""}`,
+          label: "Outreach",
+          disabled: selection.length === 0,
+          title: "Tick someone below to put them on the outreach list.",
         }}
       />
 
@@ -89,6 +99,8 @@ export default async function Page({
               judgements={judgements}
               cards={cards}
               pending={pending}
+              initialSelection={selection}
+              roleTitle={search?.brief?.title ?? ""}
             />
           )}
         </div>

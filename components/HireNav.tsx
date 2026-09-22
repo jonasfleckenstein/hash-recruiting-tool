@@ -1,11 +1,12 @@
 import Link from "next/link";
 
-export type HireStep = "search" | "shortlist" | "matching";
+export type HireStep = "search" | "shortlist" | "matching" | "outreach";
 
 const STEPS: { id: HireStep; label: string }[] = [
   { id: "search", label: "Search" },
   { id: "shortlist", label: "Shortlist" },
   { id: "matching", label: "Matching" },
+  { id: "outreach", label: "Outreach" },
 ];
 
 /**

@@ -1,6 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import {
+  ElsewhereNote,
+  RejectButton,
+  useDecisions,
+} from "@/components/Decisions";
 import type { Basis, CandidateCard, CardSection, Claim } from "@/lib/cards";
 
 /**
@@ -313,8 +318,17 @@ export function Card({ card }: { card: CandidateCard }) {
   );
 }
 
-export default function CandidateCards({ cards }: { cards: CandidateCard[] }) {
+export default function CandidateCards({
+  cards,
+  searchId,
+  roleTitle,
+}: {
+  cards: CandidateCard[];
+  searchId: string;
+  roleTitle: string;
+}) {
   const attested = cards.filter((c) => c.coverage.github === "ok").length;
+  const decisions = useDecisions(searchId, roleTitle);
 
   return (
     <div className="space-y-4">
@@ -323,9 +337,32 @@ export default function CandidateCards({ cards }: { cards: CandidateCard[] }) {
         rest, everything below is what the candidate wrote about
         themselves, which is worth reading and is not proof of anything.
       </p>
-      {cards.map((card) => (
-        <Card key={card.internalId} card={card} />
-      ))}
+      {cards.map((card) => {
+        const key = String(card.crustdataPersonId);
+        const rejected = decisions.here[key] === "rejected";
+        return (
+          <div
+            key={card.internalId}
+            className={rejected ? "opacity-45" : undefined}
+          >
+            <Card card={card} />
+            <div className="mt-1 flex flex-wrap items-center justify-end gap-2">
+              <ElsewhereNote decisions={decisions.other[key]} />
+              <RejectButton
+                state={decisions.here[key]}
+                size="md"
+                onSet={(s) =>
+                  void decisions.set(
+                    card.crustdataPersonId,
+                    s,
+                    card.internalId
+                  )
+                }
+              />
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

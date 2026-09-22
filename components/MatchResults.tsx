@@ -1,7 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Card } from "@/components/CandidateCards";
+import {
+  ElsewhereNote,
+  RejectButton,
+  useDecisions,
+} from "@/components/Decisions";
 import type { CandidateCard } from "@/lib/cards";
 import type { CandidateJudgement, CriterionVerdict } from "@/lib/judge";
 import type { MatchCriterion } from "@/lib/matching";
@@ -100,6 +105,8 @@ export default function MatchResults({
   judgements,
   cards,
   pending,
+  initialSelection,
+  roleTitle,
 }: {
   searchId: string;
   list?: string;
@@ -107,17 +114,46 @@ export default function MatchResults({
   judgements: CandidateJudgement[];
   cards: CandidateCard[];
   pending: number;
+  initialSelection: string[];
+  roleTitle: string;
 }) {
   const [judged, setJudged] = useState(judgements);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
   const [sort, setSort] = useState<SortKey>("fit");
   const [open, setOpen] = useState<string | null>(null);
+  /** Who to take to outreach. Order is preserved as picked, since that
+   *  is usually the order someone means to write in. */
+  const [picked, setPicked] = useState<string[]>(initialSelection);
+  const firstSave = useRef(true);
+
+  /**
+   * The list is a decision, not a view, so it is persisted rather than
+   * held in the URL. Ticking someone puts them on the outreach list
+   * and they stay there; unticking is the only thing that removes
+   * them.
+   */
+  useEffect(() => {
+    if (firstSave.current) {
+      firstSave.current = false;
+      return;
+    }
+    const t = setTimeout(() => {
+      void fetch("/api/outreach", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ searchId, selection: picked }),
+      });
+    }, 400);
+    return () => clearTimeout(t);
+  }, [searchId, picked]);
 
   const [onlyGithub, setOnlyGithub] = useState(false);
   const [onlyOpen, setOnlyOpen] = useState(false);
   const [minMusts, setMinMusts] = useState(0);
   const [criterionFilter, setCriterionFilter] = useState("");
+  const decisions = useDecisions(searchId, roleTitle);
+  const [hideRejected, setHideRejected] = useState(false);
 
   const totalMusts = criteria.filter((c) => c.kind === "must").length;
   const byId = useMemo(
@@ -158,6 +194,9 @@ export default function MatchResults({
   );
 
   const filtered = scored.filter((s) => {
+    const rejected =
+      decisions.here[String(s.card.crustdataPersonId)] === "rejected";
+    if (hideRejected && rejected) return false;
     if (onlyGithub && !s.card.facts.hasGithub) return false;
     if (onlyOpen && !s.card.facts.openToWork) return false;
     if (s.musts < minMusts) return false;
@@ -201,6 +240,21 @@ export default function MatchResults({
     }
   });
 
+  const toggle = (id: string) =>
+    setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+
+  /**
+   * Rejecting someone also takes them off the outreach list. Leaving
+   * them on it would be the one way a rejection could still result in
+   * a message being written.
+   */
+  const decide = (card: CandidateCard, state: "rejected" | null) => {
+    void decisions.set(card.crustdataPersonId, state, card.internalId);
+    if (state === "rejected") {
+      setPicked((p) => p.filter((x) => x !== card.internalId));
+    }
+  };
+
   return (
     <div className="space-y-4">
       <section className="rounded-xl border border-neutral-200 bg-white p-4">
@@ -235,6 +289,16 @@ export default function MatchResults({
               className="accent-neutral-900"
             />
             Open to work
+          </label>
+
+          <label className="flex items-center gap-1.5 text-xs text-neutral-700">
+            <input
+              type="checkbox"
+              checked={hideRejected}
+              onChange={(e) => setHideRejected(e.target.checked)}
+              className="accent-neutral-900"
+            />
+            Hide rejected
           </label>
 
           <label className="flex items-center gap-1.5 text-xs text-neutral-700">
@@ -297,51 +361,95 @@ export default function MatchResults({
         )}
       </section>
 
+      {picked.length > 0 && (
+        <div className="sticky top-4 z-10 flex flex-wrap items-center gap-3 rounded-xl border border-neutral-900 bg-neutral-900 px-4 py-2.5 text-white shadow-sm">
+          <span className="text-xs font-medium">
+            {picked.length} selected
+          </span>
+          <button
+            type="button"
+            onClick={() => setPicked([])}
+            className="text-[11px] text-neutral-300 underline underline-offset-2 hover:text-white"
+          >
+            Clear
+          </button>
+          <a
+            href={`/shortlist/${searchId}/outreach${list ? `?list=${list}` : ""}`}
+            className="ml-auto rounded-lg bg-white px-3 py-1.5 text-xs font-medium text-neutral-900 hover:bg-neutral-100"
+          >
+            Take {picked.length} to outreach →
+          </a>
+        </div>
+      )}
+
       <ol className="space-y-2">
         {sorted.map((s, i) => {
           const expanded = open === s.j.internalId;
+          const key = String(s.card.crustdataPersonId);
+          const state = decisions.here[key];
+          const rejected = state === "rejected";
           return (
             <li
               key={s.j.internalId}
-              className="overflow-hidden rounded-xl border border-neutral-200 bg-white"
+              className={`overflow-hidden rounded-xl border border-neutral-200 bg-white ${
+                rejected ? "opacity-45" : ""
+              }`}
             >
-              <button
-                type="button"
-                onClick={() => setOpen(expanded ? null : s.j.internalId)}
-                className="flex w-full flex-wrap items-center gap-3 px-4 py-3 text-left hover:bg-neutral-50"
-              >
-                <span className="w-6 shrink-0 font-mono text-[11px] text-neutral-400">
-                  {i + 1}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium text-neutral-900">
-                    {s.card.name}
+              <div className="flex w-full flex-wrap items-center gap-3 px-4 py-3">
+                <input
+                  type="checkbox"
+                  checked={picked.includes(s.card.internalId)}
+                  disabled={rejected}
+                  onChange={() => toggle(s.card.internalId)}
+                  aria-label={`Select ${s.card.name} for outreach`}
+                  className="shrink-0 accent-neutral-900"
+                />
+                <button
+                  type="button"
+                  onClick={() => setOpen(expanded ? null : s.j.internalId)}
+                  className="flex min-w-0 flex-1 flex-wrap items-center gap-3 text-left"
+                >
+                  <span className="w-6 shrink-0 font-mono text-[11px] text-neutral-400">
+                    {i + 1}
                   </span>
-                  <span className="block truncate text-[11px] text-neutral-500">
-                    {[s.card.currentTitle, s.card.currentCompany]
-                      .filter(Boolean)
-                      .join(" at ")}
-                  </span>
-                </span>
-
-                <span className="flex shrink-0 gap-1.5 font-mono text-sm">
-                  {criteria.map((c) => (
-                    <Mark
-                      key={c.id}
-                      v={s.j.verdicts.find((x) => x.criterionId === c.id)}
-                    />
-                  ))}
-                </span>
-
-                <span className="w-32 shrink-0 text-right text-[11px] leading-tight text-neutral-600">
-                  {s.musts}/{totalMusts} found in record
-                  {s.nices > 0 && (
-                    <span className="block text-neutral-400">
-                      +{s.nices} nice to have
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-neutral-900">
+                      {s.card.name}
                     </span>
-                  )}
-                </span>
-              </button>
+                    <span className="block truncate text-[11px] text-neutral-500">
+                      {[s.card.currentTitle, s.card.currentCompany]
+                        .filter(Boolean)
+                        .join(" at ")}
+                    </span>
+                  </span>
+
+                  <span className="flex shrink-0 gap-1.5 font-mono text-sm">
+                    {criteria.map((c) => (
+                      <Mark
+                        key={c.id}
+                        v={s.j.verdicts.find((x) => x.criterionId === c.id)}
+                      />
+                    ))}
+                  </span>
+
+                  <span className="w-32 shrink-0 text-right text-[11px] leading-tight text-neutral-600">
+                    {s.musts}/{totalMusts} found in record
+                    {s.nices > 0 && (
+                      <span className="block text-neutral-400">
+                        +{s.nices} nice to have
+                      </span>
+                    )}
+                  </span>
+                </button>
+
+                <div className="flex shrink-0 items-center gap-2">
+                  <ElsewhereNote decisions={decisions.other[key]} />
+                  <RejectButton
+                    state={state}
+                    onSet={(v) => decide(s.card, v as "rejected" | null)}
+                  />
+                </div>
+              </div>
 
               {expanded && (
                 <div className="space-y-3 border-t border-neutral-100 bg-neutral-50 p-4">

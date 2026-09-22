@@ -1,5 +1,5 @@
-import { readEnrichment } from "./enrich";
 import { readPerson } from "./people";
+import { readShortlist } from "./shortlists";
 import type { Person } from "./people";
 import type { GithubEvidence } from "./github";
 
@@ -341,13 +341,22 @@ export function buildCard(person: Person): CandidateCard {
   };
 }
 
-/** Every enriched person for a hire, in the order they were enriched. */
-export async function cardsForHire(searchId: string): Promise<CandidateCard[]> {
-  const enrichment = await readEnrichment(searchId);
-  if (!enrichment) return [];
+/**
+ * The people on one shortlist.
+ *
+ * Defaults to the most recent, which is what someone arriving from the
+ * search results almost always wants. Older lists stay reachable by id
+ * so a hire keeps a record of what was considered and when.
+ */
+export async function cardsForShortlist(
+  searchId: string,
+  listId?: string | null
+): Promise<CandidateCard[]> {
+  const list = await readShortlist(searchId, listId);
+  if (!list) return [];
 
   const cards: CandidateCard[] = [];
-  for (const internalId of enrichment.internalIds ?? []) {
+  for (const internalId of list.internalIds) {
     const person = await readPerson(internalId);
     if (person) cards.push(buildCard(person));
   }

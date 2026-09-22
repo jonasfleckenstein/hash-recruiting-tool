@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { enrichProfiles, readEnrichment } from "@/lib/enrich";
 import type { EnrichedSelection } from "@/lib/enrich";
+import { addShortlist } from "@/lib/shortlists";
 import { readSearch } from "@/lib/search";
 import { scoreSearch } from "@/lib/scoring";
 import type { RoleBrief, ScoringWeights } from "@/lib/types";
@@ -119,8 +120,24 @@ export async function POST(req: Request) {
 
   try {
     const enrichment = await enrichProfiles(id, selection);
+
+    /**
+     * Every enrichment run produces a shortlist, kept rather than
+     * replacing the last one. A hire often goes through two or three
+     * before the weights are right, and knowing who was considered on
+     * the way is worth more later than it costs to store now.
+     */
+    const shortlist = await addShortlist(id, {
+      internalIds: enrichment.internalIds,
+      creditsUsed: enrichment.creditsUsed,
+      bought: enrichment.records.length,
+      reused: enrichment.reused.length,
+      createdAt: enrichment.enrichedAt,
+    });
+
     return NextResponse.json({
       enrichment,
+      shortlist,
       /** Surfaced so the saving from the person store is visible rather
        *  than silently folded into a lower credit count. */
       spend: {

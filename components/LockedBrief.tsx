@@ -4,15 +4,15 @@ import type { Criterion, RoleBrief } from "@/lib/types";
 /**
  * What the search was, and what can no longer be changed about it.
  *
- * The distinction is not editorial, it is structural, and it already
- * exists in the data: `Criterion.check` is "filter" or "judge". A filter
- * criterion became a condition in the Crustdata query, so the pool on
- * screen was selected by it and editing it now would describe a search
- * that never ran. A judge criterion never touched the query and is
- * assessed afterwards, so it stays live.
+ * Collapsed by default. This is reference material: it matters when you
+ * are wondering why someone is or is not in the pool, and the rest of
+ * the time it is just pushing the actual work down the page.
  *
- * Deriving the panel from that flag rather than from a hand-maintained
- * list means the two can never drift apart.
+ * Only filter criteria appear. The distinction is not editorial, it is
+ * structural, and it already exists in the data: `Criterion.check` is
+ * "filter" or "judge". A filter criterion became a condition in the
+ * Crustdata query, so the pool on screen was selected by it and editing
+ * it now would describe a search that never ran.
  *
  * Every field below tolerates being absent. A saved search is a record of
  * what actually ran and is never rewritten when the schema grows, so old
@@ -23,10 +23,6 @@ import type { Criterion, RoleBrief } from "@/lib/types";
 
 function locked(brief: RoleBrief): Criterion[] {
   return (brief.criteria ?? []).filter((c) => c.selected && c.check === "filter");
-}
-
-function editable(brief: RoleBrief): Criterion[] {
-  return (brief.criteria ?? []).filter((c) => c.selected && c.check === "judge");
 }
 
 function describeWhere(brief: RoleBrief): string {
@@ -69,7 +65,6 @@ export default async function LockedBrief({ searchId }: { searchId: string }) {
 
   const brief = search.brief;
   const fixed = locked(brief);
-  const live = editable(brief);
   const titles = (brief.titleVariants ?? [])
     .filter((v) => v.selected)
     .map((v) => v.label);
@@ -84,106 +79,100 @@ export default async function LockedBrief({ searchId }: { searchId: string }) {
     : [];
 
   return (
-    <section className="rounded-xl border border-neutral-200 bg-neutral-50 p-5">
-      <div className="flex flex-wrap items-baseline justify-between gap-3">
-        <h2 className="text-sm font-semibold text-neutral-900">
-          {brief.title || "Untitled role"}
-        </h2>
-        <span className="text-[11px] text-neutral-500">
-          Searched {new Date(search.fetchedAt).toLocaleDateString("en-GB")} ·{" "}
-          {search.fetched} of {search.total ?? search.fetched} found
+    <details className="group rounded-xl border border-neutral-200 bg-neutral-50">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-3 [&::-webkit-details-marker]:hidden">
+        <span className="text-sm font-medium text-neutral-900">
+          {brief.title ? `${brief.title} · ` : ""}
+          <span className="font-normal text-neutral-500">Search filters</span>
         </span>
-      </div>
+        <span className="flex shrink-0 items-center gap-2 text-[11px] text-neutral-500">
+          {search.fetched} of {search.total ?? search.fetched} found
+          <svg
+            viewBox="0 0 12 12"
+            aria-hidden
+            className="h-3 w-3 transition-transform group-open:rotate-180"
+          >
+            <path
+              d="M2 4.5 6 8.5 10 4.5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </span>
+      </summary>
 
-      <p className="mt-1 text-[11px] text-neutral-500">
-        Fixed when the search ran. Changing any of it means starting a new
-        hire, because the pool below was selected by exactly these
-        conditions.
-      </p>
+      <div className="border-t border-neutral-200 px-5 py-4">
+        <p className="text-[11px] text-neutral-500">
+          Fixed when the search ran on{" "}
+          {new Date(search.fetchedAt).toLocaleDateString("en-GB")}. Changing
+          any of it means starting a new hire, because the pool below was
+          selected by exactly these conditions.
+        </p>
 
-      <dl className="mt-4 grid gap-4 sm:grid-cols-2">
-        <div>
-          <dt className="text-[11px] font-medium uppercase tracking-wide text-neutral-500">
-            Titles searched
-          </dt>
-          <dd className="mt-1.5 flex flex-wrap gap-1.5">
-            {titles.length > 0 ? (
-              titles.map((t) => <Pill key={t}>{t}</Pill>)
-            ) : (
-              <span className="text-xs text-neutral-400">
-                Not recorded on this search
-              </span>
-            )}
-          </dd>
-        </div>
-
-        <div>
-          <dt className="text-[11px] font-medium uppercase tracking-wide text-neutral-500">
-            Where
-          </dt>
-          <dd className="mt-1.5 text-xs text-neutral-700">
-            {describeWhere(brief)}
-          </dd>
-        </div>
-
-        <div>
-          <dt className="text-[11px] font-medium uppercase tracking-wide text-neutral-500">
-            Must-haves ·{" "}
-            {brief.gateMode === "all" ? "all required" : "any one of"}
-          </dt>
-          <dd className="mt-1.5 flex flex-wrap gap-1.5">
-            {fixed.length > 0 ? (
-              fixed.map((c) => <Pill key={c.id}>{criterionText(c)}</Pill>)
-            ) : (
-              <span className="text-xs text-neutral-400">
-                None, so the pool is title and location only
-              </span>
-            )}
-          </dd>
-        </div>
-
-        <div>
-          <dt className="text-[11px] font-medium uppercase tracking-wide text-neutral-500">
-            Profile had to show
-          </dt>
-          <dd className="mt-1.5 flex flex-wrap gap-1.5">
-            {!ev ? (
-              <span className="text-xs text-neutral-400">
-                Not recorded, this search predates the setting
-              </span>
-            ) : evidence.length > 0 ? (
-              evidence.map((e) => <Pill key={e}>{e}</Pill>)
-            ) : (
-              <span className="text-xs text-neutral-400">
-                Nothing required, so nobody was excluded for a thin profile
-              </span>
-            )}
-          </dd>
-        </div>
-      </dl>
-
-      {live.length > 0 && (
-        <div className="mt-4 border-t border-neutral-200 pt-3">
-          <p className="text-[11px] font-medium uppercase tracking-wide text-neutral-500">
-            Judged later, still editable
-          </p>
-          <div className="mt-1.5 flex flex-wrap gap-1.5">
-            {live.map((c) => (
-              <span
-                key={c.id}
-                className="rounded-md border border-dashed border-neutral-300 px-2 py-1 text-xs text-neutral-600"
-              >
-                {criterionText(c)}
-              </span>
-            ))}
+        <dl className="mt-4 grid gap-4 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <dt className="text-[11px] font-medium uppercase tracking-wide text-neutral-500">
+              Titles searched
+            </dt>
+            <dd className="mt-1.5 flex flex-wrap gap-1.5">
+              {titles.length > 0 ? (
+                titles.map((t) => <Pill key={t}>{t}</Pill>)
+              ) : (
+                <span className="text-xs text-neutral-400">
+                  Not recorded on this search
+                </span>
+              )}
+            </dd>
           </div>
-          <p className="mt-1.5 text-[11px] text-neutral-500">
-            These never touched the query. They are assessed from the
-            profile once there is enough of it to read, which for most of
-            them means after enrichment.
-          </p>
-        </div>
-      )}
-    </section>
+
+          <div className="sm:col-span-2">
+            <dt className="text-[11px] font-medium uppercase tracking-wide text-neutral-500">
+              Must-haves ·{" "}
+              {brief.gateMode === "all" ? "all required" : "any one of"}
+            </dt>
+            <dd className="mt-1.5 flex flex-wrap gap-1.5">
+              {fixed.length > 0 ? (
+                fixed.map((c) => <Pill key={c.id}>{criterionText(c)}</Pill>)
+              ) : (
+                <span className="text-xs text-neutral-400">
+                  None, so the pool is title and location only
+                </span>
+              )}
+            </dd>
+          </div>
+
+          <div>
+            <dt className="text-[11px] font-medium uppercase tracking-wide text-neutral-500">
+              Where
+            </dt>
+            <dd className="mt-1.5 text-xs text-neutral-700">
+              {describeWhere(brief)}
+            </dd>
+          </div>
+
+          <div>
+            <dt className="text-[11px] font-medium uppercase tracking-wide text-neutral-500">
+              Profile had to show
+            </dt>
+            <dd className="mt-1.5 flex flex-wrap gap-1.5">
+              {!ev ? (
+                <span className="text-xs text-neutral-400">
+                  Not recorded, this search predates the setting
+                </span>
+              ) : evidence.length > 0 ? (
+                evidence.map((e) => <Pill key={e}>{e}</Pill>)
+              ) : (
+                <span className="text-xs text-neutral-400">
+                  Nothing required, so nobody was excluded for a thin profile
+                </span>
+              )}
+            </dd>
+          </div>
+        </dl>
+      </div>
+    </details>
   );
 }

@@ -20,30 +20,13 @@ export default async function Page({
         </Link>
       </div>
 
-      <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-neutral-900">
-            Search results
-          </h1>
-          <p className="mt-1 max-w-2xl text-sm text-neutral-600">
-            Filter and sort further, before spending anything on enrichment.
-          </p>
-        </div>
-        <Link
-          href={`/shortlist/${id}/candidates`}
-          className="shrink-0 rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800"
-        >
-          Shortlist →
-        </Link>
-      </header>
-
-      {/* What the search was. Rendered on the server from the saved brief,
-          so it cannot drift from the conditions that produced the pool. */}
-      <div className="mb-6">
+      {/* LockedBrief stays a server component, passed through as children
+          so the client component can own the header. The Shortlist button
+          there has to know whether the current selection contains anyone
+          unenriched, which is client state. */}
+      <Shortlist searchId={id}>
         <LockedBrief searchId={id} />
-      </div>
-
-      <Shortlist searchId={id} />
+      </Shortlist>
     </main>
   );
 }

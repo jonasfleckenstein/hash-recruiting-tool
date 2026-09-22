@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { EXPERIENCE_BANDS, DEFAULT_WEIGHTS, STAGE_RULES } from "@/lib/scoring";
 import type { ScoreRun, ScoredProfile } from "@/lib/scoring";
 import type { ScoringWeights } from "@/lib/types";
@@ -46,7 +47,14 @@ const PENALTIES: { key: keyof ScoringWeights; label: string }[] = [
   { key: "penaliseStale", label: "Profile over a year old" },
 ];
 
-export default function Shortlist({ searchId }: { searchId: string }) {
+export default function Shortlist({
+  searchId,
+  children,
+}: {
+  searchId: string;
+  children?: React.ReactNode;
+}) {
+  const router = useRouter();
   const [weights, setWeights] = useState<ScoringWeights>(DEFAULT_WEIGHTS);
   const [band, setBand] = useState<string | null>(null);
   const [cut, setCut] = useState(20);
@@ -65,14 +73,7 @@ export default function Shortlist({ searchId }: { searchId: string }) {
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [loadedBand, setLoadedBand] = useState(false);
   const [enriching, setEnriching] = useState(false);
-  const [enrichNote, setEnrichNote] = useState("");
   const [enrichError, setEnrichError] = useState("");
-  /** Result of the last enrichment on this page, for the summary line. */
-  const [lastRun, setLastRun] = useState<{
-    n: number;
-    credits: number;
-    at: string;
-  } | null>(null);
 
   const run = useCallback(async () => {
     setBusy(true);
@@ -128,7 +129,7 @@ export default function Shortlist({ searchId }: { searchId: string }) {
   }, [loadKnown]);
 
   /**
-   * Enrich an explicit set of people.
+   * Enrich an explicit set of people, then go to the shortlist.
    *
    * Named rather than ranked, because the person worth a credit is often
    * not in the top twenty: a strong candidate the current weights rank
@@ -139,7 +140,6 @@ export default function Shortlist({ searchId }: { searchId: string }) {
     if (picked.size === 0) return;
     setEnriching(true);
     setEnrichError("");
-    setEnrichNote("");
     try {
       const res = await fetch("/api/enrich", {
         method: "POST",
@@ -153,23 +153,17 @@ export default function Shortlist({ searchId }: { searchId: string }) {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "Enrichment failed.");
-      const e = json.enrichment;
-      setLastRun({
-        n: (e.records?.length ?? 0) + (e.reused?.length ?? 0),
-        credits: e.creditsUsed ?? 0,
-        at: e.enrichedAt ?? "",
-      });
-      if (json.spend) {
-        setEnrichNote(
-          `${json.spend.bought} bought, ${json.spend.reused} already known and reused, ${json.spend.creditsUsed} credits spent.`
-        );
-      }
-      setPicked(new Set());
       await loadKnown();
+      // Land on the shortlist this run just created, not whichever one
+      // happens to be newest by the time the page renders.
+      const listId = json.shortlist?.id;
+      router.push(
+        `/shortlist/${searchId}/candidates${listId ? `?list=${listId}` : ""}`
+      );
     } catch (err) {
       setEnrichError(err instanceof Error ? err.message : "Enrichment failed.");
+      setEnriching(false);
     }
-    setEnriching(false);
   };
 
   const rows = data?.run.rows ?? [];
@@ -180,6 +174,14 @@ export default function Shortlist({ searchId }: { searchId: string }) {
   const pickedIds = [...picked];
   const reusable = pickedIds.filter((id) => known[id]?.fresh).length;
   const payable = pickedIds.length - reusable;
+
+  /**
+   * A selection containing anyone unenriched has not been paid for yet,
+   * so the stored shortlist does not reflect it. Going straight there
+   * would quietly show the previous list while the operator believes
+   * they are looking at their new one.
+   */
+  const unpaidSelection = payable > 0;
 
   const toggle = (id: string) =>
     setPicked((prev) => {
@@ -192,8 +194,47 @@ export default function Shortlist({ searchId }: { searchId: string }) {
   const pickAllShortlisted = () =>
     setPicked(new Set(selected.map((r) => String(r.id))));
 
+  /**
+   * Everyone the store has ever enriched, anywhere in the ranking.
+   *
+   * Deliberately includes people whose enrichment has aged past the
+   * freshness window. They are still "already enriched" in the sense
+   * that matters here, they will simply refresh and cost a credit, and
+   * the count under the buttons says so.
+   */
+  const pickAllKnown = () =>
+    setPicked(new Set(rows.filter((r) => known[String(r.id)]).map((r) => String(r.id))));
+
   return (
     <div className="space-y-6">
+      <header className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-neutral-900">
+            Search results
+          </h1>
+          <p className="mt-1 max-w-2xl text-sm text-neutral-600">
+            Filter and sort further, before spending anything on enrichment.
+          </p>
+        </div>
+        {unpaidSelection ? (
+          <span
+            title="Your selection includes people who have not been enriched, so it is not a stored shortlist yet. Use Enrich and Create new Shortlist below."
+            className="shrink-0 cursor-not-allowed rounded-lg bg-neutral-200 px-4 py-2 text-sm font-medium text-neutral-400"
+          >
+            Shortlists →
+          </span>
+        ) : (
+          <Link
+            href={`/shortlist/${searchId}/candidates`}
+            className="shrink-0 rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800"
+          >
+            Shortlists →
+          </Link>
+        )}
+      </header>
+
+      {children}
+
       <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
         {/* Pinned and independently scrollable. With a hundred rows in
             the list, controls that scroll away are controls you stop
@@ -434,35 +475,24 @@ export default function Shortlist({ searchId }: { searchId: string }) {
 
           {data && (
             <div className="rounded-xl border border-neutral-200 bg-white p-4">
-              <h3 className="text-sm font-semibold text-neutral-900">Enrich</h3>
-              <p className="mt-1 text-[11px] text-neutral-500">
-                Buys skills, GitHub, profile summaries and role descriptions,
-                none of which search returns. Roughly 1 credit a head, 2 with
-                GitHub, so about fifty times the cost of finding them. Saved to
-                disk, so scoring against the brief is then free to rerun.
-              </p>
+              <h3 className="text-sm font-semibold text-neutral-900">
+                Select &amp; Enrich
+              </h3>
 
               <div className="mt-3 flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => void enrichPicked()}
-                  disabled={enriching || picked.size === 0}
-                  className="rounded-lg bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
-                >
-                  {enriching
-                    ? "Enriching"
-                    : picked.size === 0
-                      ? "Select people to enrich"
-                      : reusable > 0
-                        ? `Enrich ${payable} (${reusable} already known, free)`
-                        : `Enrich ${payable} (about ${Math.round(payable * 1.7)} credits)`}
-                </button>
                 <button
                   type="button"
                   onClick={pickAllShortlisted}
                   className="rounded-lg border border-neutral-300 px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-100"
                 >
-                  Select the top {data.run.cut}
+                  Select top {data.run.cut}
+                </button>
+                <button
+                  type="button"
+                  onClick={pickAllKnown}
+                  className="rounded-lg border border-neutral-300 px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-100"
+                >
+                  Select already enriched
                 </button>
                 {picked.size > 0 && (
                   <button
@@ -473,34 +503,25 @@ export default function Shortlist({ searchId }: { searchId: string }) {
                     Clear
                   </button>
                 )}
-                <Link
-                  href={`/shortlist/${searchId}/candidates`}
-                  className="ml-auto rounded-lg border border-neutral-300 px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-100"
+                <button
+                  type="button"
+                  onClick={() => void enrichPicked()}
+                  disabled={enriching || picked.size === 0}
+                  className="ml-auto rounded-lg bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
                 >
-                  Shortlist →
-                </Link>
+                  {enriching ? "Enriching…" : "Enrich and Create new Shortlist"}
+                </button>
               </div>
 
-              <p className="mt-1.5 text-[10px] text-neutral-400">
-                Tick anyone, in or out of the shortlist. A strong candidate
-                the current weights rank fortieth is worth a credit, and
-                dragging them into the top twenty by re-tuning the weights
-                would only distort the ranking for everyone else. People
-                already enriched by any hire within the last month are free
-                and marked in green.
-              </p>
-
-              {lastRun && (
+              {picked.size > 0 && (
                 <p className="mt-2 text-[11px] text-neutral-600">
-                  Last run: {lastRun.n} profiles, {lastRun.credits} credits,{" "}
-                  {lastRun.at.slice(0, 16).replace("T", " ")}
+                  {picked.size} selected
+                  {reusable > 0 && ` · ${reusable} already enriched, free`}
+                  {payable > 0 &&
+                    ` · ${payable} new, about ${Math.round(payable * 1.7)} credits`}
                 </p>
               )}
-              {enrichNote && (
-                <p className="mt-2 rounded-lg bg-neutral-100 px-3 py-2 text-[11px] text-neutral-600">
-                  {enrichNote}
-                </p>
-              )}
+
               {enrichError && (
                 <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
                   {enrichError}

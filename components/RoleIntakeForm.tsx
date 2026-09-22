@@ -775,6 +775,9 @@ export default function RoleIntakeForm() {
           >
             {counting ? "Counting…" : "1. Check how many matches"}
           </button>
+          <p className="mt-1 text-center text-[10px] text-neutral-400">
+            Aim for 20 to 500. Free, so check as often as you like.
+          </p>
 
           {count && (
             <div
@@ -801,13 +804,36 @@ export default function RoleIntakeForm() {
                   ))}
                 </>
               ) : (
-                <p className="text-sm">
-                  <span className="font-semibold">
-                    {count.relation === "gte" ? "at least " : ""}
-                    {count.total.toLocaleString()}
-                  </span>{" "}
-                  people match
-                </p>
+                <>
+                  <p className="text-sm">
+                    <span className="font-semibold">
+                      {count.relation === "gte" ? "at least " : ""}
+                      {count.total.toLocaleString()}
+                    </span>{" "}
+                    people match
+                  </p>
+                  {/* A pool has a workable size, and it is worth saying
+                      so while the controls that change it are still on
+                      screen. Too small and the ranking has nothing to
+                      choose between; too large and the title or the
+                      location is doing no work, so the top twenty are
+                      close to arbitrary. */}
+                  {!countStale && (
+                    <p
+                      className={`mt-1 text-[11px] ${
+                        count.total < 20 || count.total > 500
+                          ? "text-amber-800"
+                          : "text-neutral-500"
+                      }`}
+                    >
+                      {count.total < 20
+                        ? "Narrow. Drop a must-have, widen the radius, or turn on an adjacent title."
+                        : count.total > 500
+                          ? "Broad. Add a must-have or tighten the location, or the ranking will be picking twenty out of a crowd."
+                          : "A good size. Between 20 and 500 is enough to rank without being a crowd."}
+                    </p>
+                  )}
+                </>
               )}
               {countStale && (
                 <p className="mt-1 text-[11px]">
